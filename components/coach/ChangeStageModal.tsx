@@ -1,0 +1,270 @@
+import {
+  View, Text, TextInput, TouchableOpacity, Pressable, ScrollView, Modal, ActivityIndicator,
+} from "react-native";
+import { useState, useEffect, useCallback } from "react";
+import { X } from "lucide-react-native";
+import { useAuth } from "@/lib/session";
+import {
+  STAGES, fetchTemplates, changeStage,
+  type Stage, type StoredDietTemplate, type StoredRoutineTemplate,
+} from "@/lib/coach";
+
+const VOLT   = "#CCFF00";
+const SILVER = "#8e8e93";
+const GLASS  = {
+  backgroundColor: "rgba(28, 28, 30, 0.4)",
+  borderWidth: 1,
+  borderColor: "rgba(255, 255, 255, 0.06)",
+} as const;
+const athletic = { fontWeight: "900" as const, fontStyle: "italic" as const, textTransform: "uppercase" as const };
+
+function plusDays(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// ── §2B CHANGE STAGE MODAL — single/multi student quick assigner.
+// Open-reset defaults, verbatim §3.4: stage "Volumen", stageNumber 1, empty
+// template ids, timing "immediate", executionDate = today+10d. ─────────────
+export default function ChangeStageModal({ visible, studentIds, onClose, onApplied }: {
+  visible: boolean;
+  studentIds: string[];
+  onClose: () => void;
+  onApplied: () => void;
+}) {
+  const { token } = useAuth();
+
+  const [stage,       setStage]       = useState<Stage>("Volumen");
+  const [stageNumber, setStageNumber] = useState("1");
+  const [dietTemplateId,    setDietTemplateId]    = useState("");
+  const [routineTemplateId, setRoutineTemplateId] = useState("");
+  const [timing,       setTiming]       = useState<"immediate" | "scheduled">("immediate");
+  const [executionDate, setExecutionDate] = useState(plusDays(10));
+
+  const [dietTemplates,    setDietTemplates]    = useState<StoredDietTemplate[]>([]);
+  const [routineTemplates, setRoutineTemplates] = useState<StoredRoutineTemplate[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(true);
+
+  const [saving, setSaving] = useState(false);
+  const [error,  setError]  = useState<string | null>(null);
+
+  // Open-reset (verbatim) — re-arms every time the sheet opens.
+  useEffect(() => {
+    if (!visible) return;
+    setStage("Volumen");
+    setStageNumber("1");
+    setDietTemplateId("");
+    setRoutineTemplateId("");
+    setTiming("immediate");
+    setExecutionDate(plusDays(10));
+    setError(null);
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible || !token) return;
+    setTemplatesLoading(true);
+    Promise.all([fetchTemplates("diet", token), fetchTemplates("routine", token)])
+      .then(([diets, routines]) => {
+        setDietTemplates(diets.filter((t): t is StoredDietTemplate => t.type === "diet"));
+        setRoutineTemplates(routines.filter((t): t is StoredRoutineTemplate => t.type === "routine"));
+      })
+      .catch(() => { setDietTemplates([]); setRoutineTemplates([]); })
+      .finally(() => setTemplatesLoading(false));
+  }, [visible, token]);
+
+  const submit = useCallback(async () => {
+    if (!token) return;
+    const n = parseInt(stageNumber, 10) || 1;
+    if (timing === "scheduled" && !executionDate.trim()) { setError("La fecha de ejecución es obligatoria para programar."); return; }
+    setSaving(true);
+    setError(null);
+    try {
+      await changeStage({
+        studentIds,
+        stage,
+        stageNumber: Math.max(1, n),
+        dietTemplateId: dietTemplateId || undefined,
+        routineTemplateId: routineTemplateId || undefined,
+        executionDate: timing === "scheduled" ? executionDate.trim() : undefined,
+      }, token);
+      onApplied();
+      onClose();
+    } catch {
+      setError("Hubo un error al guardar los cambios.");
+    } finally {
+      setSaving(false);
+    }
+  }, [token, stage, stageNumber, dietTemplateId, routineTemplateId, timing, executionDate, studentIds, onApplied, onClose]);
+
+  const title = studentIds.length === 1 ? "Cambiar Etapa del Alumno" : `Cambiar Etapa de Alumnos (${studentIds.length})`;
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.95)", paddingTop: 70 }}>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", paddingHorizontal: 20, marginBottom: 6 }}>
+          <View style={{ flex: 1, paddingRight: 12 }}>
+            <Text style={{ ...athletic, fontSize: 18, color: "#fff" }}>{title}</Text>
+          </View>
+          <TouchableOpacity activeOpacity={0.7} onPress={onClose} hitSlop={10}>
+            <X size={22} color={SILVER} />
+          </TouchableOpacity>
+        </View>
+        <Text style={{ fontSize: 12, color: SILVER, paddingHorizontal: 20, marginBottom: 20, lineHeight: 17 }}>
+          Define los nuevos objetivos, planes de dieta/rutina y cuándo ejecutarlos.
+        </Text>
+
+        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
+          {/* Nueva Etapa */}
+          <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: SILVER, marginBottom: 8 }}>Nueva Etapa</Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 18 }}>
+            {STAGES.map(s => {
+              const active = stage === s;
+              return (
+                <Pressable
+                  key={s}
+                  onPress={() => setStage(s)}
+                  style={{
+                    paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999,
+                    backgroundColor: active ? VOLT : "rgba(255,255,255,0.05)",
+                    borderWidth: 1, borderColor: active ? VOLT : "rgba(255,255,255,0.1)",
+                  }}
+                >
+                  <Text className="font-bold" style={{ fontSize: 12, color: active ? "#000" : "#d4d4d8" }}>{s}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {/* Número de Etapa */}
+          <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: SILVER, marginBottom: 8 }}>
+            Número de Etapa
+          </Text>
+          <TextInput
+            value={stageNumber}
+            onChangeText={setStageNumber}
+            keyboardType="number-pad"
+            style={{ ...GLASS, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, color: "#fff", fontSize: 14, marginBottom: 18, width: 100 }}
+          />
+
+          {/* Asignar Plantilla de Dieta */}
+          <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: SILVER, marginBottom: 8 }}>
+            Asignar Plantilla de Dieta (Opcional)
+          </Text>
+          {templatesLoading ? (
+            <ActivityIndicator color={VOLT} style={{ marginBottom: 18 }} />
+          ) : (
+            <View style={{ marginBottom: 18, gap: 6 }}>
+              <Pressable
+                onPress={() => setDietTemplateId("")}
+                style={{ ...GLASS, borderRadius: 10, padding: 10, borderColor: dietTemplateId === "" ? VOLT : GLASS.borderColor }}
+              >
+                <Text style={{ fontSize: 12, color: dietTemplateId === "" ? VOLT : "#d4d4d8" }}>
+                  Mantener dieta actual o sin cambios
+                </Text>
+              </Pressable>
+              {dietTemplates.map(t => (
+                <Pressable
+                  key={t.id}
+                  onPress={() => setDietTemplateId(t.id)}
+                  style={{ ...GLASS, borderRadius: 10, padding: 10, borderColor: dietTemplateId === t.id ? VOLT : GLASS.borderColor }}
+                >
+                  <Text style={{ fontSize: 12, color: dietTemplateId === t.id ? VOLT : "#d4d4d8" }}>
+                    {t.name} ({t.totalCalories} kcal)
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+
+          {/* Asignar Plantilla de Rutina */}
+          <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: SILVER, marginBottom: 8 }}>
+            Asignar Plantilla de Rutina (Opcional)
+          </Text>
+          {!templatesLoading && (
+            <View style={{ marginBottom: 18, gap: 6 }}>
+              <Pressable
+                onPress={() => setRoutineTemplateId("")}
+                style={{ ...GLASS, borderRadius: 10, padding: 10, borderColor: routineTemplateId === "" ? VOLT : GLASS.borderColor }}
+              >
+                <Text style={{ fontSize: 12, color: routineTemplateId === "" ? VOLT : "#d4d4d8" }}>
+                  Mantener rutina actual o sin cambios
+                </Text>
+              </Pressable>
+              {routineTemplates.map(t => (
+                <Pressable
+                  key={t.id}
+                  onPress={() => setRoutineTemplateId(t.id)}
+                  style={{ ...GLASS, borderRadius: 10, padding: 10, borderColor: routineTemplateId === t.id ? VOLT : GLASS.borderColor }}
+                >
+                  <Text style={{ fontSize: 12, color: routineTemplateId === t.id ? VOLT : "#d4d4d8" }}>
+                    {t.name} ({t.daysPerWeek} días/sem)
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
+
+          {/* Timing */}
+          <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: SILVER, marginBottom: 8 }}>
+            Fecha de Ejecución
+          </Text>
+          <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
+            {(["immediate", "scheduled"] as const).map(t => {
+              const active = timing === t;
+              return (
+                <Pressable
+                  key={t}
+                  onPress={() => setTiming(t)}
+                  style={{
+                    flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: "center",
+                    backgroundColor: active ? VOLT : "rgba(255,255,255,0.05)",
+                    borderWidth: 1, borderColor: active ? VOLT : "rgba(255,255,255,0.1)",
+                  }}
+                >
+                  <Text className="font-black" style={{ fontSize: 12, color: active ? "#000" : "#d4d4d8" }}>
+                    {t === "immediate" ? "Inmediato" : "Programar"}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          {timing === "scheduled" && (
+            <TextInput
+              value={executionDate}
+              onChangeText={setExecutionDate}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor="#52525b"
+              style={{ ...GLASS, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, color: "#fff", fontSize: 14 }}
+            />
+          )}
+
+          {error && (
+            <Text style={{ fontSize: 11, color: "#f87171", marginTop: 16, textAlign: "center" }}>{error}</Text>
+          )}
+        </ScrollView>
+
+        <View style={{ position: "absolute", bottom: 24, left: 20, right: 20, flexDirection: "row", gap: 10 }}>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={onClose}
+            style={{ flex: 1, height: 52, borderRadius: 26, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "rgba(255,255,255,0.15)" }}
+          >
+            <Text className="font-bold" style={{ fontSize: 12, color: "#d4d4d8" }}>Cancelar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            activeOpacity={0.8}
+            disabled={saving}
+            onPress={submit}
+            style={{ flex: 2, height: 52, borderRadius: 26, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, backgroundColor: VOLT, opacity: saving ? 0.6 : 1 }}
+          >
+            {saving && <ActivityIndicator size="small" color="#000" />}
+            <Text style={{ ...athletic, fontSize: 13, color: "#000" }}>
+              {saving ? "Guardando..." : timing === "scheduled" ? "Programar Cambio" : "Aplicar Cambio"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}

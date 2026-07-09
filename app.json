@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "MyCoach",
+    "slug": "mycoach-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "mycoach",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#000000",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#000000",
+      "resizeMode": "contain"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.fellsteam.mycoach",
+      "infoPlist": {
+        "UIViewControllerBasedStatusBarAppearance": true,
+        "NSMotionUsageDescription": "MyCoach uses motion for premium animations"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#000000"
+      },
+      "package": "com.fellsteam.mycoach",
+      "softwareKeyboardLayoutMode": "resize"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#000000",
+          "resizeMode": "contain"
+        }
+      ],
+      [
+        "expo-font",
+        {
+          "fonts": []
+        }
+      ],
+      "expo-video"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
