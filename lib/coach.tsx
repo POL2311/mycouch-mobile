@@ -17,11 +17,35 @@ export interface DietMeal {
   protein: number; carbs: number; fat: number;   // flat, as authored/stored
   items: string[];
 }
-export interface DietData {
-  name: string;
+
+// ── Per-day diet override — mirrors RoutineDayAuth's exact shape/convention
+// (day label is display-only, weekday is the optional ISO pin that overrides
+// ordinal slot position, resolved the same way via ordinalScheduleLabel /
+// the client-side resolveDietDay in lib/portal.tsx). Each day carries its
+// OWN totalCalories/macros/meals — a leg day and a rest day can have
+// completely different targets, not just a different meal list under one
+// shared calorie total. ──────────────────────────────────────────────────
+export interface DietDayAuth {
+  day: string;
+  weekday?: number;
   totalCalories: number;
   macros: Macros;
   meals: DietMeal[];
+}
+
+export interface DietData {
+  name: string;
+  // Used directly when `days` is absent/empty (fixed week-round diet, the
+  // only mode that existed before per-day diets). When `days` is present and
+  // non-empty, these three fields are unused by day-aware consumers and only
+  // exist for older clients / the "sin dieta" empty-detector.
+  totalCalories: number;
+  macros: Macros;
+  meals: DietMeal[];
+  // NEW — additive, backward compatible. Absent or empty = fixed week-round
+  // diet (existing behavior, untouched). Non-empty = per-day diet; each
+  // DietDayAuth is independently targeted.
+  days?: DietDayAuth[];
 }
 
 // ── §1.3 routineJson snapshot shape (TemplateEditorModal RoutineData) ───────
@@ -49,7 +73,7 @@ export interface RoutineData {
 
 // ── §2.1 Template CRUD — StoredTemplate = { id, type, name, ...parsedDataJson } ──
 export type TemplateType = "diet" | "routine";
-export interface StoredDietTemplate   { id: string; type: "diet";    name: string; totalCalories: number; macros: Macros; meals: DietMeal[] }
+export interface StoredDietTemplate   { id: string; type: "diet";    name: string; totalCalories: number; macros: Macros; meals: DietMeal[]; days?: DietDayAuth[] }
 export interface StoredRoutineTemplate { id: string; type: "routine"; name: string; daysPerWeek: number; days: RoutineDayAuth[] }
 export type StoredTemplate = StoredDietTemplate | StoredRoutineTemplate;
 
@@ -123,6 +147,11 @@ export interface CoachStudent {
   completionRate: number;
   dietJson: string;
   routineJson: string;
+  // Real Prisma scalars (toStudent() always includes these — confirmed via
+  // backend-context.md) — current best-lift values, not a history log.
+  prSquat: number;
+  prDeadlift: number;
+  prBench: number;
   scheduledChange?: ScheduledChangeRow | null;
 }
 
@@ -175,6 +204,7 @@ export function parseDiet(json: string): DietData {
       totalCalories: parsed.totalCalories ?? 0,
       macros: parsed.macros ?? { protein: 0, carbs: 0, fat: 0 },
       meals: Array.isArray(parsed.meals) ? parsed.meals : [],
+      days: Array.isArray(parsed.days) && parsed.days.length > 0 ? parsed.days : undefined,
     };
   } catch {
     return EMPTY_DIET;
@@ -229,6 +259,87 @@ export function fetchStudents(token: string): Promise<CoachStudent[]> {
 export interface TeamTelemetry { totalStudents: number; activeToday: number; streakPct: number }
 export function fetchTeamTelemetry(token: string): Promise<TeamTelemetry> {
   return api<TeamTelemetry>("/api/coach/telemetry", { token });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  Per-student detail — confirmed against the backend source (backend-context.md,
+//  generated from a direct read of the `mycouch` repo):
+//    GET /api/students/[id] → { student, detail }, NOT a flat object.
+//      · student.{prSquat,prDeadlift,prBench}: current single best-lift
+//        values — there is no PR *history* table, so no "récord por fecha"
+//        list actually exists on the backend.
+//      · detail.weightHistory: [{ date, weight }] (WeightEntry rows, asc).
+//      · detail.measurements: [{ id, date, chest, waist, hips, armL, armR,
+//        thighL, thighR }] (Measurement rows, asc) — real Prisma field
+//        names, NOT the invented chest/waist/hip/arms shape this used to
+//        assume.
+//      · Daily meal-check completion is NOT included here — it lives in
+//        DailyCheck rows, read via the separate GET /api/students/[id]/checks
+//        (kind: "meal" | "exercise", itemKey = the meal's `name`, per the
+//        student-side check-setter in app/(portal)/nutrition/index.tsx).
+// ══════════════════════════════════════════════════════════════════════════════
+export interface WeightHistoryPoint { date: string; weight: number }
+
+export interface BodyMeasurementPoint {
+  date:   string;
+  chest:  number;
+  waist:  number;
+  hips:   number;
+  armL:   number;
+  armR:   number;
+  thighL: number;
+  thighR: number;
+}
+
+export interface DailyMealCheck { name: string; completed: boolean }
+
+export interface CoachStudentDetail {
+  weightHistory:   WeightHistoryPoint[];
+  measurements:    BodyMeasurementPoint[];
+  todayMealChecks: DailyMealCheck[];
+}
+
+function asArray<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
+
+function todayStr(): string {
+  return new Date().toISOString().split("T")[0];
+}
+
+export async function fetchStudentDetail(studentId: string, token: string): Promise<CoachStudentDetail> {
+  const [wrapped, checks] = await Promise.all([
+    api<{ student: { dietJson: string; lastWeighIn: string; currentWeight: number }; detail: Record<string, unknown> }>(
+      `/api/students/${studentId}`, { token },
+    ),
+    // Read-only compliance feed — same 401/403 rules as the parent route.
+    // A student with no checks yet (or a transient failure) just means
+    // "nothing done today", never a broken screen.
+    api<{ date: string; kind: string; itemKey: string }[]>(`/api/students/${studentId}/checks`, { token })
+      .catch(() => [] as { date: string; kind: string; itemKey: string }[]),
+  ]);
+
+  const { detail, student } = wrapped as any;
+
+  const weightHistory = asArray<WeightHistoryPoint>(detail?.weightHistory);
+  const measurements  = asArray<BodyMeasurementPoint>(detail?.measurements);
+
+  const diet  = parseDiet(student?.dietJson ?? "");
+  const today = todayStr();
+  const doneToday = new Set(
+    checks.filter(c => c.kind === "meal" && c.date === today).map(c => c.itemKey),
+  );
+
+  return {
+    // A brand-new student always has at least the creation-time weigh-in row
+    // on the backend, but this stays defensive: an empty/malformed response
+    // still renders a usable single point instead of a blank chart.
+    weightHistory: weightHistory.length > 0
+      ? weightHistory
+      : [{ date: student?.lastWeighIn ?? today, weight: student?.currentWeight ?? 0 }],
+    measurements,
+    todayMealChecks: diet.meals.map(m => ({ name: m.name, completed: doneToday.has(m.name) })),
+  };
 }
 
 // §2.1 GET /api/templates?type=diet|routine
@@ -297,6 +408,65 @@ export function unlinkStudent(studentId: string, token: string): Promise<{ succe
   return api<{ success: boolean }>(`/api/coach/students/${studentId}`, { method: "DELETE", token });
 }
 
+// PUT /api/students/[id] { detailUpdates: { diet } } — direct diet assignment
+// on the student's OWN dietJson (src/lib/db.ts updateStudent(): `if
+// (detailUpdates.diet !== undefined) data.dietJson = JSON.stringify(...)`).
+// Distinct from createTemplate/updateTemplate, which write to the reusable
+// Templates library instead — this is the one-off "asignar directo a este
+// alumno" path. The student's /api/mobile/portal reads the same dietJson
+// column back, normalised, so this is the single source of truth for both
+// the coach's Nutrición tab and the student's Nutrición screen.
+export function assignStudentDiet(
+  studentId: string, diet: DietData, token: string,
+): Promise<{ success: boolean }> {
+  return api<{ success: boolean }>(`/api/students/${studentId}`, {
+    method: "PUT", token, body: { detailUpdates: { diet } } as unknown as Record<string, unknown>,
+  });
+}
+
+// PATCH /api/students/[id] — toggles the real access gate (isActive), fully
+// independent of paymentStatus (see CoachStudent's doc comment).
+//
+// Empirically confirmed real (curl against couch-oqvh.vercel.app): an
+// unauthenticated PATCH to this exact path returns 403 {"error":"No
+// autorizado"} — a real JSON auth-guard response — not Next.js's 404 page.
+// The previous two guesses (/api/coach/students/[id], then
+// /api/coach/students/[id]/status) both returned that 404 page, i.e.
+// genuinely don't exist. The request BODY shape ({isActive}) still hasn't
+// been verified against a real authenticated response, only the route
+// itself — if this still fails with a real token, the body/field name is
+// the next thing to check, not the path.
+export function setStudentActive(
+  studentId: string, isActive: boolean, token: string,
+): Promise<{ success: boolean }> {
+  return api<{ success: boolean }>(`/api/students/${studentId}`, {
+    method: "PATCH", token, body: { isActive },
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  RED-FLAG (INACTIVITY) DETECTION — CoachStudent carries no explicit "last
+//  activity" field; lastWeighIn is the only real date signal the roster
+//  endpoint exposes per student. Labeled generically ("actividad", not
+//  "entrenamiento") since a weigh-in isn't specifically a workout log — this
+//  computes a real, honest number from real data, not a fabricated one, but
+//  it's an approximation of "activity" bounded by what the API actually
+//  returns today. ─────────────────────────────────────────────────────────
+export const RED_FLAG_INACTIVITY_DAYS = 14;
+
+export function daysSinceLastActivity(lastWeighIn: string): number | null {
+  const then = new Date(lastWeighIn);
+  if (Number.isNaN(then.getTime())) return null;
+  const ms = Date.now() - then.getTime();
+  return Math.max(0, Math.floor(ms / (1000 * 60 * 60 * 24)));
+}
+
+export function isRedFlag(student: Pick<CoachStudent, "lastWeighIn" | "isActive">): boolean {
+  if (!student.isActive) return false;   // suspended students aren't "at risk", they're already gated
+  const days = daysSinceLastActivity(student.lastWeighIn);
+  return days !== null && days >= RED_FLAG_INACTIVITY_DAYS;
+}
+
 // GET /api/coach/notices (take 50) + DELETE /api/coach/notices/[id]
 // (ownership-checked) — Tablón de Avisos management.
 export function fetchCoachNotices(token: string): Promise<CoachNotice[]> {
@@ -316,6 +486,12 @@ interface CoachState {
   students:  CoachStudent[];
   isLoading: boolean;
   refresh:   () => Promise<void>;
+  // Local, synchronous patch — lets a mutation (e.g. setStudentActive) update
+  // the roster instantly instead of waiting on a full refetch, so a coach
+  // sees the Suspender/Activar toggle flip the moment they tap it. Callers
+  // are responsible for reverting this (pass the inverse patch) if the
+  // matching API call then fails.
+  patchStudent: (id: string, patch: Partial<CoachStudent>) => void;
 }
 
 const CoachContext = createContext<CoachState | null>(null);
@@ -339,8 +515,12 @@ export function CoachProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  const patchStudent = useCallback((id: string, patch: Partial<CoachStudent>) => {
+    setStudents(prev => prev.map(s => (s.id === id ? { ...s, ...patch } : s)));
+  }, []);
+
   return (
-    <CoachContext.Provider value={{ students, isLoading, refresh }}>
+    <CoachContext.Provider value={{ students, isLoading, refresh, patchStudent }}>
       {children}
     </CoachContext.Provider>
   );

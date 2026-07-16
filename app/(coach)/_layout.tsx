@@ -6,7 +6,14 @@ import * as Haptics from "expo-haptics";
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { CoachProvider } from "@/lib/coach";
 
-const VOLT = "#CCFF00";
+// ── Coach Portal premium dark palette ────────────────────────────────────────
+export const COACH_BG     = "#000000";
+export const COACH_CARD   = "#0F0F10";
+export const COACH_BORDER = "#2C2C2E";
+export const COACH_ACCENT = "#CCFF00";
+export const COACH_ALERT  = "#FF3B30";
+export const COACH_MUTED  = "#8E8E93";
+export const COACH_GOLD   = "#FFD700";
 
 type IconName = keyof typeof Ionicons.glyphMap;
 
@@ -24,9 +31,9 @@ const TAB_META: Record<string, { label: string; icon: IconName; iconOutline: Ico
   "perfil/index": { label: "Perfil",    icon: "person", iconOutline: "person-outline" },
 };
 
-// ── Coach floor dock — exact client-dock parity: 84dp flat bar, #161618 fill,
-// 0.5px #2C2C2E top hairline. The focused tab morphs into the floating volt
-// sphere; everything else stays a flat outline glyph. ───────────────────────
+// ── Coach floor dock — premium dark palette: #0F0F10 fill, #2C2C2E hairline.
+// The focused tab morphs into the floating cyan-neon sphere; everything else
+// stays a flat outline glyph. ────────────────────────────────────────────────
 function CoachDock({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
 
@@ -35,7 +42,7 @@ function CoachDock({ state, navigation }: BottomTabBarProps) {
       style={{
         position: "absolute", bottom: 0, left: 0, right: 0,
         height: 84 + insets.bottom, paddingBottom: insets.bottom,
-        backgroundColor: "#161618", borderTopWidth: 0.5, borderColor: "#2C2C2E",
+        backgroundColor: COACH_CARD, borderTopWidth: 0.5, borderColor: COACH_BORDER,
         flexDirection: "row", alignItems: "center",
       }}
     >
@@ -57,10 +64,10 @@ function CoachDock({ state, navigation }: BottomTabBarProps) {
             <Pressable key={route.key} onPress={handlePress} style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
               <View
                 style={{
-                  width: 56, height: 56, borderRadius: 28, backgroundColor: VOLT,
+                  width: 56, height: 56, borderRadius: 28, backgroundColor: COACH_ACCENT,
                   alignItems: "center", justifyContent: "center",
                   transform: [{ translateY: -16 }, { scale: 1.1 }],
-                  shadowColor: VOLT, shadowOpacity: 0.45, shadowRadius: 22, shadowOffset: { width: 0, height: 0 }, elevation: 12,
+                  shadowColor: COACH_ACCENT, shadowOpacity: 0.45, shadowRadius: 22, shadowOffset: { width: 0, height: 0 }, elevation: 12,
                 }}
               >
                 <Ionicons name={meta.icon} size={24} color="#000000" />
@@ -74,8 +81,8 @@ function CoachDock({ state, navigation }: BottomTabBarProps) {
 
         return (
           <Pressable key={route.key} onPress={handlePress} style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 4 }}>
-            <Ionicons name={meta.iconOutline} size={18} color="#52525b" />
-            <Text className="font-semibold uppercase" style={{ fontSize: 8, letterSpacing: 0.5, color: "#52525b" }}>
+            <Ionicons name={meta.iconOutline} size={18} color={COACH_MUTED} />
+            <Text className="font-semibold uppercase" style={{ fontSize: 8, letterSpacing: 0.5, color: COACH_MUTED }}>
               {meta.label}
             </Text>
           </Pressable>

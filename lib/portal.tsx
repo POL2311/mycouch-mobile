@@ -70,6 +70,17 @@ export interface Student {
   prBench:       number;
 }
 
+// Per-day diet override — client-side mirror of DietDayAuth (lib/coach.tsx),
+// same dayIndex convention as RoutineDay above (JS Date#getDay, 0=Sun…6=Sat;
+// present = explicit pin, absent = resolved ordinally).
+export interface DietDay {
+  label:         string;
+  dayIndex?:     number;
+  totalCalories: number;
+  macros:        { protein: number; carbs: number; fat: number };
+  meals:         Meal[];
+}
+
 export interface PortalDetail {
   height?:   number;
   bodyFat?:  number;
@@ -83,9 +94,30 @@ export interface PortalDetail {
     totalCalories:  number;
     macros:         { protein: number; carbs: number; fat: number };
     meals:          Meal[];
+    // NEW — additive, backward compatible. Absent/empty = fixed week-round
+    // diet (existing behavior, untouched); non-empty = per-day, resolved via
+    // resolveDietDay() below exactly like routine.days already is.
+    days?:          DietDay[];
   };
   weightHistory:  { weight: number; date: string }[];
   measurements:   { date: string; weight: number }[];
+}
+
+// Mirrors resolveRoutineDay() in lib/workout.tsx: explicit dayIndex pin wins
+// over ordinal position; otherwise slot 0 = Monday, wrapping through Sunday.
+// `forJsWeekday` defaults to the device's actual calendar day (0=Sun…6=Sat,
+// Date#getDay convention) so the workout-style "just show today" callers get
+// that automatically — but nutrition/index.tsx lets the user BROWSE other
+// days of the week via its WeekdayStrip, so it passes the browsed day's
+// weekday explicitly rather than always resolving to literal today, keeping
+// the shown diet targets consistent with whichever day's meal-checks are
+// on screen.
+export function resolveDietDay(days: DietDay[], forJsWeekday: number = new Date().getDay()): DietDay | undefined {
+  if (days.length === 0) return undefined;
+  const explicit = days.find(d => d.dayIndex === forJsWeekday);
+  if (explicit) return explicit;
+  const appDayIdx = forJsWeekday === 0 ? 7 : forJsWeekday;      // 1=Mon…7=Sun
+  return days[appDayIdx - 1];                                   // ordinal, no wrap
 }
 
 interface PortalState {

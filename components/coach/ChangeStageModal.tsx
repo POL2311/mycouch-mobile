@@ -27,16 +27,25 @@ function plusDays(days: number): string {
 // ── §2B CHANGE STAGE MODAL — single/multi student quick assigner.
 // Open-reset defaults, verbatim §3.4: stage "Volumen", stageNumber 1, empty
 // template ids, timing "immediate", executionDate = today+10d. ─────────────
-export default function ChangeStageModal({ visible, studentIds, onClose, onApplied }: {
+export default function ChangeStageModal({ visible, studentIds, onClose, onApplied, initialStage, initialStageNumber }: {
   visible: boolean;
   studentIds: string[];
   onClose: () => void;
   onApplied: () => void;
+  // Optional overrides for the open-reset defaults below — every existing
+  // call site (the roster's bulk-select bar) omits these and keeps the
+  // exact spec'd "always resets to Volumen/1" behavior untouched. Added so
+  // alumno/[id].tsx's "Asignar rutina" button — which opens this modal for
+  // ONE already-in-progress student just to attach a routine — doesn't
+  // silently reset that student's real current stage back to Volumen/1 as
+  // a side effect of a change they never asked for.
+  initialStage?: Stage;
+  initialStageNumber?: number;
 }) {
   const { token } = useAuth();
 
-  const [stage,       setStage]       = useState<Stage>("Volumen");
-  const [stageNumber, setStageNumber] = useState("1");
+  const [stage,       setStage]       = useState<Stage>(initialStage ?? "Volumen");
+  const [stageNumber, setStageNumber] = useState(String(initialStageNumber ?? 1));
   const [dietTemplateId,    setDietTemplateId]    = useState("");
   const [routineTemplateId, setRoutineTemplateId] = useState("");
   const [timing,       setTiming]       = useState<"immediate" | "scheduled">("immediate");
@@ -52,14 +61,14 @@ export default function ChangeStageModal({ visible, studentIds, onClose, onAppli
   // Open-reset (verbatim) — re-arms every time the sheet opens.
   useEffect(() => {
     if (!visible) return;
-    setStage("Volumen");
-    setStageNumber("1");
+    setStage(initialStage ?? "Volumen");
+    setStageNumber(String(initialStageNumber ?? 1));
     setDietTemplateId("");
     setRoutineTemplateId("");
     setTiming("immediate");
     setExecutionDate(plusDays(10));
     setError(null);
-  }, [visible]);
+  }, [visible, initialStage, initialStageNumber]);
 
   useEffect(() => {
     if (!visible || !token) return;

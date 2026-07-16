@@ -3,7 +3,7 @@ import {
   ImageBackground, StyleSheet,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { MotiView, AnimatePresence } from "moti";
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import * as Haptics from "expo-haptics";
@@ -14,7 +14,7 @@ import Animated, {
   interpolate, Extrapolation,
 } from "react-native-reanimated";
 import Svg, { Defs, LinearGradient, Stop, Rect } from "react-native-svg";
-import { usePortal } from "@/lib/portal";
+import { usePortal, resolveDietDay } from "@/lib/portal";
 import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
 import type { Meal } from "@/lib/portal";
@@ -1253,7 +1253,16 @@ function MealDetailSheet({
 
 export default function NutritionTab() {
   const { token }               = useAuth();
-  const { student, detail, isLoading } = usePortal();
+  const { student, detail, isLoading, refresh } = usePortal();
+
+  // PortalProvider fetches once on mount only — without this, a diet the
+  // coach just assigned (dietJson, via PUT /api/students/[id]) wouldn't show
+  // up until the app was force-quit and reopened. Re-pulling on every focus
+  // is what makes the coach → student sync actually "immediate" the moment
+  // the student opens or returns to this tab.
+  useFocusEffect(
+    useCallback(() => { refresh(); }, [refresh]),
+  );
 
   const [activeDay,   setActiveDay]   = useState<number>(appToday());
   const [checkedKeys, setCheckedKeys] = useState<Set<string>>(new Set());
@@ -1400,9 +1409,17 @@ export default function NutritionTab() {
     }
   }, [token, checkedKeys, activeDate]);
 
-  const diet        = detail?.diet;
-  const meals       = diet?.meals ?? [];
-  const totalTarget = num(diet?.totalCalories, 2800);
+  const diet = detail?.diet;
+  // Per-day diet (diet.days present) resolves against the BROWSED day
+  // (activeDay), not always literal today — so the shown kcal/macro targets
+  // stay consistent with whichever day's meal-checks (fetched for
+  // activeDate above) are on screen. Falls back to the flat diet fields
+  // when there's no per-day structure (existing fixed-diet behavior,
+  // completely unchanged for any diet authored before this feature).
+  const activeJsWeekday = activeDay === 7 ? 0 : activeDay;   // app 1=Mon…7=Sun → JS 0=Sun…6=Sat
+  const todayDietDay = diet?.days && diet.days.length > 0 ? resolveDietDay(diet.days, activeJsWeekday) : undefined;
+  const meals       = todayDietDay?.meals ?? diet?.meals ?? [];
+  const totalTarget = num(todayDietDay?.totalCalories ?? diet?.totalCalories, 2800);
 
   // num() at each addend — one malformed meal record (bad backend data,
   // never runtime-validated past lib/api.ts's type assertion) must not turn

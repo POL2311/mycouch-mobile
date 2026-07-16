@@ -18,6 +18,15 @@ interface AuthState {
   isLoading: boolean;
   login:     (email: string, password: string) => Promise<void>;
   logout:    () => Promise<void>;
+  // Both PATCH /api/mobile/me and POST /api/mobile/me/password are inferred
+  // paths, not verified contracts — GET /api/mobile/me is the one confirmed
+  // endpoint on this resource (used for token verification below); these are
+  // reasonable RESTful siblings on the same route, following the same
+  // "consistent guess, not a spec" treatment as setStudentActive in
+  // lib/coach.tsx. If either fails, this is the first place to check against
+  // the real Next.js routes.
+  updateProfile:  (patch: { name?: string; email?: string }) => Promise<void>;
+  changePassword: (payload: { currentPassword: string; newPassword: string }) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -72,8 +81,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   }
 
+  async function updateProfile(patch: { name?: string; email?: string }) {
+    if (!token) throw new Error("No hay sesión activa.");
+    const updated = await api<AuthUser>("/api/mobile/me", { method: "PATCH", token, body: patch });
+    setUser(updated);
+  }
+
+  async function changePassword(payload: { currentPassword: string; newPassword: string }) {
+    if (!token) throw new Error("No hay sesión activa.");
+    await api<{ success: boolean }>("/api/mobile/me/password", { method: "POST", token, body: payload });
+  }
+
   return (
-    <AuthContext.Provider value={{ token, user, role: user?.role ?? null, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ token, user, role: user?.role ?? null, isLoading, login, logout, updateProfile, changePassword }}>
       {children}
     </AuthContext.Provider>
   );
