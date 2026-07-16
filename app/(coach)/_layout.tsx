@@ -97,6 +97,8 @@ export default function CoachLayout() {
         <Tabs.Screen name="perfil/index" />
         {/* Retired from the dock, kept reachable in the tree */}
         <Tabs.Screen name="sala" options={{ href: null }} />
+        {/* Hidden route — pushed from the Alumnos roster, off the dock */}
+        <Tabs.Screen name="alumno" options={{ href: null }} />
       </Tabs>
     </CoachProvider>
   );

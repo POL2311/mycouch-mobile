@@ -149,6 +149,16 @@ const PER_100G_FALLBACK: Record<MacroClass, { kcal: number; fat: number }> = {
   protein: { kcal: 150, fat: 5   },
 };
 
+// lib/api.ts's api<T>() is a bare `res.json() as Promise<T>` — a type
+// assertion, not runtime validation. TypeScript's `number` types on Meal/
+// MealIngredient are therefore a hope, not a guarantee: a malformed backend
+// record (null calories, a non-numeric macro) reaches this arithmetic as-is
+// and silently poisons every downstream sum with NaN. num() is the one
+// coercion point all raw external numeric fields pass through below.
+function num(v: unknown, fallback = 0): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+}
+
 function per100gFor(foodName: string, cls: MacroClass): { kcal: number; fat: number } {
   return NUTRITION_PER_100G.find(n => n.match.test(foodName)) ?? PER_100G_FALLBACK[cls];
 }
@@ -164,10 +174,11 @@ function inferMacroClass(ing: ResolvedIngredient): MacroClass {
 // Calorie-based macro estimation when an ingredient lacks explicit macros
 // (spec §4.3.4): protein ≈ cal×0.25/4 · carbs ≈ cal×0.475/4 · fat ≈ cal×0.30/9.
 function estimateMacros(calories: number) {
+  const cal = num(calories);
   return {
-    protein: Math.round((calories * 0.25)  / 4),
-    carbs:   Math.round((calories * 0.475) / 4),
-    fat:     Math.round((calories * 0.30)  / 9),
+    protein: Math.round((cal * 0.25)  / 4),
+    carbs:   Math.round((cal * 0.475) / 4),
+    fat:     Math.round((cal * 0.30)  / 9),
   };
 }
 
@@ -175,21 +186,27 @@ function estimateMacros(calories: number) {
 // dietJson; legacy plans only have `items: string[]`, which we synthesize into
 // rows (grams parsed from the text when present, calories split evenly).
 function resolveIngredients(meal: Meal): ResolvedIngredient[] {
+  const mealCalories = num(meal.calories);
   if (meal.ingredients?.length) {
-    const evenCal = Math.round(meal.calories / meal.ingredients.length);
+    const evenCal = Math.round(mealCalories / meal.ingredients.length);
     return meal.ingredients.map((ing, i) => {
-      const calories = ing.calories ?? evenCal;
+      const calories = num(ing.calories, evenCal);
+      const macros   = ing.macros ?? estimateMacros(calories);
       return {
         key:      `${i}-${ing.name}`,
         name:     ing.name,
-        grams:    ing.grams ?? 100,
+        grams:    num(ing.grams, 100),
         calories,
-        macros:   ing.macros ?? estimateMacros(calories),
+        macros: {
+          protein: num(macros.protein),
+          carbs:   num(macros.carbs),
+          fat:     num(macros.fat),
+        },
       };
     });
   }
   const n = Math.max(meal.items.length, 1);
-  const evenCal = Math.round(meal.calories / n);
+  const evenCal = Math.round(mealCalories / n);
   return meal.items.map((item, i) => {
     const gramsMatch = item.match(/(\d+)\s*g\b/i);
     return {
@@ -223,19 +240,19 @@ function computeCandidates(
   cls: MacroClass,
   substitutes: FoodSubstitute[],
 ): SwapCandidate[] {
-  const lockedValue = cls === "protein" ? ing.macros.protein : ing.macros.carbs;
+  const lockedValue = num(cls === "protein" ? ing.macros.protein : ing.macros.carbs);
   const category    = cls === "protein" ? "Proteínas" : "Carbohidratos";
   return substitutes
     .filter(s => s.category === category)
     .map(s => {
-      const newGrams = Math.round(lockedValue * s.ratio);
+      const newGrams = Math.round(lockedValue * num(s.ratio, 1));
       const per100   = per100gFor(s.substituteFood, cls);
       return {
         id:             s.id,
         substituteFood: s.substituteFood,
         newGrams,
-        kcalDelta:      Math.round((newGrams * per100.kcal) / 100) - ing.calories,
-        fatDelta:       Math.round(((newGrams * per100.fat) / 100 - ing.macros.fat) * 10) / 10,
+        kcalDelta:      Math.round((newGrams * per100.kcal) / 100) - num(ing.calories),
+        fatDelta:       Math.round(((newGrams * per100.fat) / 100 - num(ing.macros.fat)) * 10) / 10,
       };
     });
 }
@@ -1385,10 +1402,13 @@ export default function NutritionTab() {
 
   const diet        = detail?.diet;
   const meals       = diet?.meals ?? [];
-  const totalTarget = diet?.totalCalories ?? 2800;
+  const totalTarget = num(diet?.totalCalories, 2800);
 
-  const totalConsumed   = meals.reduce((s, m) => checkedKeys.has(m.name) ? s + m.calories : s, 0);
-  const proteinConsumed = meals.reduce((s, m) => checkedKeys.has(m.name) ? s + m.macros.protein : s, 0);
+  // num() at each addend — one malformed meal record (bad backend data,
+  // never runtime-validated past lib/api.ts's type assertion) must not turn
+  // the whole day's total into NaN.
+  const totalConsumed   = meals.reduce((s, m) => checkedKeys.has(m.name) ? s + num(m.calories) : s, 0);
+  const proteinConsumed = meals.reduce((s, m) => checkedKeys.has(m.name) ? s + num(m.macros?.protein) : s, 0);
   const completedCount  = meals.filter(m => checkedKeys.has(m.name)).length;
   const perfectDay      = meals.length > 0 && completedCount === meals.length;
   // §4.3.1 trigger: remaining balance hits 0 ⇔ caloricPct reaches 1.

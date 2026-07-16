@@ -159,7 +159,7 @@ function PhotoScrim() {
 }
 
 export default function StatsScreen() {
-  const { student, detail, refresh } = usePortal();
+  const { student, detail, refresh, isLoading } = usePortal();
   const { token } = useAuth();
   const { doneEx } = useWorkout();
 
@@ -301,6 +301,21 @@ export default function StatsScreen() {
   const inputBorder = weightSaveState === "error" ? "#f87171"
     : weightSaveState === "done" ? VOLT
     : "rgba(204,255,0,0.22)";
+
+  // Without this gate, the chart briefly renders FALLBACK_WEIGHTS demo data
+  // and student?.currentWeight ?? 0-style zeros before the real portal fetch
+  // resolves — not a crash (everything here already has safe fallbacks), but
+  // a jarring flash of wrong numbers on every mount.
+  if (isLoading) {
+    return (
+      <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: OLED, alignItems: "center", justifyContent: "center" }}>
+        <ActivityIndicator color={VOLT} />
+        <Text className="text-[11px] uppercase mt-3" style={{ color: SILVER, letterSpacing: 1.2 }}>
+          CARGANDO ESTADÍSTICAS...
+        </Text>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: OLED }}>

@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import { ArrowRight, Timer, Check, AlertTriangle } from "lucide-react-native";
 import Svg, { Circle, Defs, LinearGradient, Stop } from "react-native-svg";
 import { useWorkout } from "@/lib/workout";
+import { useGamification } from "@/lib/gamification";
 
 const VOLT   = "#CCFF00";
 const CYAN   = "#40E0D0";
@@ -28,6 +29,7 @@ const SPARK_OPACITY = [0.35, 0.5, 0.4, 0.75, 1];
 // ── Tactical Telemetry precision-matrix summary ──────────────────────────────
 export default function WorkoutSuccessScreen() {
   const { durationStr, biometrics, resetSession, syncStatus, syncCompletedSession, setLifecycle } = useWorkout();
+  const { addXP } = useGamification();
 
   // This is a terminal success screen reached via router.push from the
   // WORKOUT tab, but that tab is registered with href:null (to hide it from
@@ -36,7 +38,13 @@ export default function WorkoutSuccessScreen() {
   // since there's nothing to pop to. replace() to the real WORKOUT tab root
   // sidesteps that, and is arguably more correct anyway: a finished-session
   // screen shouldn't be revisitable via hardware back once dismissed.
-  const leave = () => { resetSession(); router.replace("/(portal)"); };
+  //
+  // +100 XP here, not a streak increment — the app already has a real,
+  // backend-owned Student.streak (see lib/portal.tsx) that drives the coach
+  // dashboard's team telemetry. A second, client-only "streak" incremented
+  // by this button would just be a confusing duplicate of a number that
+  // already exists and already means something real.
+  const leave = () => { addXP(100); resetSession(); router.replace("/(portal)"); };
 
   // "Continue" must NOT call resetSession() — that wipes doneSets/doneEx/
   // setLogs back to empty, which would make a button promising to let you

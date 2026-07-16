@@ -1,5 +1,5 @@
 import {
-  View, Text, TouchableOpacity, Pressable, ScrollView, Modal, ImageBackground, StyleSheet,
+  View, Text, TouchableOpacity, Pressable, ScrollView, Modal, ImageBackground, StyleSheet, ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MotiView } from "moti";
@@ -208,7 +208,7 @@ function SettingsOverlay({ visible, onClose, name, planLabel }: {
 //  SCREEN
 // ══════════════════════════════════════════════════════════════════════════════
 export default function PerfilScreen() {
-  const { student } = usePortal();
+  const { student, isLoading } = usePortal();
   const { token, logout } = useAuth();
   const { doneEx } = useWorkout();
 
@@ -277,6 +277,20 @@ export default function PerfilScreen() {
     { label: "DEADLIFT", kg: student?.prDeadlift ?? 0, accent: CYAN },
     { label: "BENCH",    kg: student?.prBench    ?? 0, accent: "#808080" },
   ];
+
+  // Without this gate, rank/streak/PRs all briefly render their ?? 0 / ??
+  // "Definición" fallbacks before the real portal fetch resolves — not a
+  // crash, but a flash of wrong numbers (e.g. "0 días de racha") on mount.
+  if (isLoading) {
+    return (
+      <SafeAreaView edges={[]} style={{ flex: 1, backgroundColor: OLED, alignItems: "center", justifyContent: "center" }}>
+        <ActivityIndicator color={VOLT} />
+        <Text className="text-[11px] uppercase mt-3" style={{ color: SILVER, letterSpacing: 1.2 }}>
+          CARGANDO PERFIL...
+        </Text>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView edges={[]} style={{ flex: 1, backgroundColor: OLED }}>

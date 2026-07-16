@@ -14,6 +14,7 @@ import { BlurView } from "expo-blur";
 import { Heart, Zap, Check, ChevronLeft, Settings, Dumbbell, Minus, Plus, Play, Pause } from "lucide-react-native";
 import Svg, { Circle, Defs, LinearGradient, Stop, Rect } from "react-native-svg";
 import { useWorkout } from "@/lib/workout";
+import { useGamification } from "@/lib/gamification";
 import { usePortal } from "@/lib/portal";
 import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
@@ -592,6 +593,7 @@ export default function ExerciseFocusScreen() {
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const { student, refresh } = usePortal();
+  const { addXP } = useGamification();
   const {
     exercises, setActiveExIdx, doneSets, doneEx, handleSetComplete,
     restOn, restSecs, restTotal, skipRest, extendRest, biometrics, overallPct,
@@ -685,6 +687,7 @@ export default function ExerciseFocusScreen() {
     const weight = focusWeight;
     const reps   = focusReps;
     await handleSetComplete({ weight, reps });
+    addXP(15);
     if (lift && token && weight > (currentPR ?? 0)) {
       setOptimisticPR(weight);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
@@ -692,7 +695,7 @@ export default function ExerciseFocusScreen() {
         .then(() => refresh())
         .catch(() => setOptimisticPR(null));
     }
-  }, [handleSetComplete, focusWeight, focusReps, lift, currentPR, token, refresh]);
+  }, [handleSetComplete, focusWeight, focusReps, lift, currentPR, token, refresh, addXP]);
 
   // ── Video ────────────────────────────────────────────────────────────────
   const videoSource = ex?.videoUrl ?? null;

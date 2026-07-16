@@ -24,8 +24,26 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
     try {
-      const err = (await res.json()) as { error?: string };
-      if (err.error) message = err.error;
+      // Different API routes on the Next.js backend don't all shape errors
+      // the same way — `error` is the common case here, but Zod-validated
+      // routes commonly return `message` or an `errors[]` array instead. If
+      // none of these match, the raw body is logged so a failure is never
+      // silently reduced to just "HTTP 400" with no way to see why.
+      const err = (await res.json()) as {
+        error?: string; message?: string; errors?: (string | { message?: string })[];
+      };
+      if (err.error) {
+        message = err.error;
+      } else if (err.message) {
+        message = err.message;
+      } else if (Array.isArray(err.errors) && err.errors.length > 0) {
+        message = err.errors
+          .map(e => (typeof e === "string" ? e : e.message))
+          .filter(Boolean)
+          .join("; ") || message;
+      } else {
+        console.error(`[api] ${method} ${path} → ${res.status} with unrecognized error shape:`, err);
+      }
     } catch {}
     throw new Error(message);
   }

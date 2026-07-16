@@ -4,8 +4,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MotiView } from "moti";
+import { BlurView } from "expo-blur";
 import { PulseButton } from "@/components/ui/PulseButton";
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import {
   LayoutGrid, Trophy, Zap, Users, Bell, Heart, MessageCircle, Activity, ChevronDown,
@@ -32,6 +34,11 @@ const GLASS  = {
 } as const;
 
 const athletic = { fontWeight: "900" as const, fontStyle: "italic" as const, textTransform: "uppercase" as const };
+
+// Offline-first snapshot for the public-rooms lobby — bad gym Wi-Fi
+// shouldn't mean a blank/crashed SALAS tab, just a stale-but-usable list.
+const ROOMS_CACHE_KEY = "mc:salas_rooms_snapshot";
+interface RoomsSnapshot { rooms: PublicRoom[]; currentRoom: CurrentRoom }
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  TYPES — mirrored verbatim from MYCOACH_SALAS_WEB_BLUEPRINT.md §3.1
@@ -209,13 +216,14 @@ function AvatarRing({ member, size, ringColor, glowColor }: {
 //  LOBBY — currentView === "LOBBY"  (RADAR DE SALAS gate, real endpoints)
 // ══════════════════════════════════════════════════════════════════════════════
 function SalasLobby({
-  profileInitials, rooms, loading, fetchErr, codeInput, onChangeCode,
+  profileInitials, rooms, loading, fetchErr, isOffline, codeInput, onChangeCode,
   codeError, codeSuccess, isJoining, joinError, onInject, onJoinRoom,
 }: {
   profileInitials: string;
   rooms: PublicRoom[];
   loading: boolean;
   fetchErr: "AUTH" | "NET" | null;
+  isOffline: boolean;
   codeInput: string;
   onChangeCode: (t: string) => void;
   codeError: boolean;
@@ -283,6 +291,23 @@ function SalasLobby({
       <Text style={{ fontSize: 10, letterSpacing: 1.5, fontWeight: "bold", color: SILVER, textTransform: "uppercase", paddingHorizontal: 20, marginTop: 24, marginBottom: 10 }}>
         SALAS PÚBLICAS
       </Text>
+
+      {/* Offline fallback indicator — only shown when a live fetch failed
+          and this list is a cached snapshot, not fresh data. */}
+      {isOffline && !loading && (
+        <View
+          style={{
+            marginHorizontal: 20, marginBottom: 10, borderRadius: 12, paddingVertical: 8, paddingHorizontal: 12,
+            backgroundColor: "rgba(255,255,255,0.04)", borderWidth: 1, borderColor: "rgba(255,255,255,0.1)",
+            flexDirection: "row", alignItems: "center", gap: 8,
+          }}
+        >
+          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: SILVER }} />
+          <Text className="font-mono" style={{ fontSize: 10, letterSpacing: 0.5, color: SILVER }}>
+            MODO SIN CONEXIÓN — MOSTRANDO ÚLTIMA VERSIÓN GUARDADA
+          </Text>
+        </View>
+      )}
 
       {loading ? (
         <View style={{ ...GLASS, borderRadius: 16, marginHorizontal: 20, padding: 20, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 }}>
@@ -1230,6 +1255,10 @@ export default function SalasScreen() {
   const [currentRoom,   setCurrentRoom]   = useState<CurrentRoom>(null);
   const [roomsLoading,  setRoomsLoading]  = useState(true);
   const [roomsFetchErr, setRoomsFetchErr] = useState<"AUTH" | "NET" | null>(null);
+  // True only when NET failure was recovered from a cached snapshot instead
+  // of a live response — AUTH failures and the empty-cache NET case still
+  // show the existing full-screen error state, not silently masked.
+  const [isOffline, setIsOffline] = useState(false);
   const [codeInput,   setCodeInput]   = useState("");
   const [codeError,   setCodeError]   = useState(false);
   const [codeSuccess, setCodeSuccess] = useState(false);
@@ -1257,26 +1286,55 @@ export default function SalasScreen() {
   }, []);
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
+  // Last resort when a live fetch fails outright: hydrate from whatever
+  // snapshot was cached on the last successful load, rather than a blank or
+  // crashed lobby. Returns whether a usable snapshot was found.
+  const loadRoomsFromCache = useCallback(async (): Promise<boolean> => {
+    try {
+      const raw = await AsyncStorage.getItem(ROOMS_CACHE_KEY);
+      if (!raw) return false;
+      const cached = JSON.parse(raw) as RoomsSnapshot;
+      setPublicRooms(Array.isArray(cached.rooms) ? cached.rooms : []);
+      setCurrentRoom(cached.currentRoom ?? null);
+      setIsOffline(true);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
   // ── Public rooms directory — fires while the gate shows ──────────────────
   const fetchRooms = useCallback(() => {
     if (!token) { setRoomsLoading(false); return; }
     setRoomsLoading(true);
     setRoomsFetchErr(null);
+    setIsOffline(false);
     fetch(`${BASE_URL}/api/community/public-rooms`, { headers: { Authorization: `Bearer ${token}` } })
       .then(async r => {
         if (r.status === 403 || r.status === 401) { setRoomsFetchErr("AUTH"); return null; }
-        if (!r.ok)                                { setRoomsFetchErr("NET");  return null; }
+        if (!r.ok) {
+          // Non-auth failure (bad gym Wi-Fi, 5xx, timeout-ish) — try the
+          // cache before surfacing the full-screen NET error state.
+          if (!(await loadRoomsFromCache())) setRoomsFetchErr("NET");
+          return null;
+        }
         return r.json() as Promise<{ rooms: PublicRoom[]; currentRoom: CurrentRoom }>;
       })
       .then(d => {
         if (!d) return;
-        setPublicRooms(Array.isArray(d.rooms) ? d.rooms : []);
-        setCurrentRoom(d.currentRoom ?? null);
-        if (d.currentRoom) setCurrentView("ROOM_ACTIVE");   // already linked → skip the gate
+        const rooms = Array.isArray(d.rooms) ? d.rooms : [];
+        const room  = d.currentRoom ?? null;
+        setPublicRooms(rooms);
+        setCurrentRoom(room);
+        if (room) setCurrentView("ROOM_ACTIVE");   // already linked → skip the gate
+        // Snapshot this success for the next offline fallback.
+        AsyncStorage.setItem(ROOMS_CACHE_KEY, JSON.stringify({ rooms, currentRoom: room })).catch(() => {});
       })
-      .catch(() => setRoomsFetchErr("NET"))
+      .catch(async () => {
+        if (!(await loadRoomsFromCache())) setRoomsFetchErr("NET");
+      })
       .finally(() => setRoomsLoading(false));
-  }, [token]);
+  }, [token, loadRoomsFromCache]);
 
   useEffect(() => { if (currentView === "LOBBY") fetchRooms(); }, [currentView, fetchRooms]);
 
@@ -1433,6 +1491,7 @@ export default function SalasScreen() {
           rooms={publicRooms}
           loading={roomsLoading}
           fetchErr={roomsFetchErr}
+          isOffline={isOffline}
           codeInput={codeInput}
           onChangeCode={t => { setCodeInput(t); setCodeError(false); setCodeSuccess(false); setJoinError(null); }}
           codeError={codeError}
@@ -1453,17 +1512,48 @@ export default function SalasScreen() {
           {activeTab === "FEED"    && <FeedTab posts={activityFeed} liked={likedActivity} onToggleLike={toggleLike} />}
           {activeTab === "RANKING" && <RankingTab />}
           {activeTab === "RETOS"   && (
-            <RetosTab
-              selectedAthlete={selectedAthlete}
-              onSelectAthlete={setSelectedAthlete}
-              modality={challengeModality}
-              onSetModality={setChallengeModality}
-              stake={stakeAmount}
-              onSetStake={setStakeAmount}
-              walletBalance={walletBalance}
-              liveStakes={liveStakes}
-              onLaunch={launchChallenge}
-            />
+            // Pre-release lock: RETOS debits real wallet balance via a live
+            // PATCH /api/me/wallet call, so this isn't ready to ship yet.
+            // pointerEvents="none" on the whole subtree is a hard guarantee
+            // against any tap reaching RetosTab's buttons — safer than
+            // hand-disabling each control and risking missing one.
+            <View style={{ flex: 1 }}>
+              <View pointerEvents="none" style={{ opacity: 0.5 }}>
+                <RetosTab
+                  selectedAthlete={selectedAthlete}
+                  onSelectAthlete={setSelectedAthlete}
+                  modality={challengeModality}
+                  onSetModality={setChallengeModality}
+                  stake={stakeAmount}
+                  onSetStake={setStakeAmount}
+                  walletBalance={walletBalance}
+                  liveStakes={liveStakes}
+                  onLaunch={launchChallenge}
+                />
+              </View>
+              <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
+                <BlurView
+                  intensity={25}
+                  tint="dark"
+                  style={{ ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center", paddingHorizontal: 32 }}
+                >
+                  <View
+                    style={{
+                      ...GLASS, borderRadius: 24, padding: 24, alignItems: "center", gap: 10, maxWidth: 320,
+                      borderColor: "rgba(204,255,0,0.25)",
+                    }}
+                  >
+                    <Zap size={22} color={VOLT} strokeWidth={1.5} />
+                    <Text style={{ ...athletic, fontSize: 16, color: "#fff", textAlign: "center" }}>
+                      PRÓXIMAMENTE
+                    </Text>
+                    <Text className="font-mono text-center" style={{ fontSize: 11, letterSpacing: 0.3, color: SILVER, lineHeight: 16 }}>
+                      Próximamente podrás retar a tu comunidad
+                    </Text>
+                  </View>
+                </BlurView>
+              </View>
+            </View>
           )}
           {activeTab === "ROSTER"  && <RosterTab onSendChallenge={sendChallengeTo} />}
           {activeTab === "AVISOS"  && <AvisosTab notices={serverNotices} />}

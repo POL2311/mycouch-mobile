@@ -7,8 +7,10 @@
     "scheme": "mycoach",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#000000",
+    "icon": "./assets/icon.png", 
     "newArchEnabled": true,
     "splash": {
+      "image": "./assets/splash.png",
       "backgroundColor": "#000000",
       "resizeMode": "contain"
     },
@@ -17,11 +19,15 @@
       "bundleIdentifier": "com.fellsteam.mycoach",
       "infoPlist": {
         "UIViewControllerBasedStatusBarAppearance": true,
-        "NSMotionUsageDescription": "MyCoach uses motion for premium animations"
+        "NSMotionUsageDescription": "MyCoach uses motion for premium animations",
+        "NSCameraUsageDescription": "MyCoach necesita acceso a la cámara para que puedas tomar y subir fotos de tus progresos físicos y comidas.",
+        "NSPhotoLibraryUsageDescription": "MyCoach necesita acceso a tu galería para que puedas seleccionar fotos de tus entrenamientos y perfil.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
       "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#000000"
       },
       "package": "com.fellsteam.mycoach",
@@ -46,6 +52,12 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "01ce6ca5-1e2e-462b-b451-1ca2de0f19c6"
+      }
     }
   }
 }

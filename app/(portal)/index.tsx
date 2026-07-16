@@ -7,12 +7,13 @@ import { MotiView } from "moti";
 import { useEffect, useState, useCallback } from "react";
 import { PulseButton } from "@/components/ui/PulseButton";
 import * as Haptics from "expo-haptics";
-import { Play, Pause, Check, Activity } from "lucide-react-native";
+import { Play, Pause, Check, Moon } from "lucide-react-native";
 import { BlurView } from "expo-blur";
 import Svg, { Defs, LinearGradient, Stop, Rect } from "react-native-svg";
 import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
 import { useWorkout, todayDateStr } from "@/lib/workout";
+import { useGamification } from "@/lib/gamification";
 import { VOLT, WATER_TARGET_ML, WATER_DOSE_ML } from "@/components/workout-ui";
 
 // ── Cinema Bento card imagery — placeholder gym stock photography keyed by
@@ -81,6 +82,14 @@ export default function WorkoutTab() {
     workoutDone, setActiveExIdx, handleFinalizar,
     durationStr, allDone, sortedIndices, lifecycleLabel,
   } = useWorkout();
+  const { currentRank, progressPct, nextThresholdXP, addXP, rankUpFlash, clearRankUpFlash } = useGamification();
+
+  // Auto-dismiss the rank-up toast a couple seconds after it fires.
+  useEffect(() => {
+    if (!rankUpFlash) return;
+    const t = setTimeout(clearRankUpFlash, 2600);
+    return () => clearTimeout(t);
+  }, [rankUpFlash, clearRankUpFlash]);
 
   // ── Hydration Táctica (lobby-only; independent of the exercise focus flow) ─
   const [waterMl,   setWaterMl]   = useState(0);
@@ -100,6 +109,10 @@ export default function WorkoutTab() {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setWaterBusy(true);
     const prev = waterMl;
+    // The button is disabled once waterMl >= WATER_TARGET_ML (guard above),
+    // so this can only cross the threshold once per day — no extra "already
+    // awarded today" bookkeeping needed for the XP trigger below.
+    const crossesTarget = prev < WATER_TARGET_ML && prev + WATER_DOSE_ML >= WATER_TARGET_ML;
     setWaterMl(prev + WATER_DOSE_ML); // optimistic
     try {
       await api("/api/student/water", {
@@ -107,12 +120,15 @@ export default function WorkoutTab() {
         token,
         body: { amountMl: WATER_DOSE_ML, date: todayDateStr() },
       });
+      // XP only on confirmed persistence, not the optimistic update — a
+      // failed/rolled-back log shouldn't still pay out.
+      if (crossesTarget) addXP(25);
     } catch {
       setWaterMl(prev); // rollback
     } finally {
       setWaterBusy(false);
     }
-  }, [token, waterBusy, waterMl]);
+  }, [token, waterBusy, waterMl, addXP]);
 
   const openExercise = useCallback(async (idx: number) => {
     if (lifecycle === "IDLE") return;
@@ -200,6 +216,27 @@ export default function WorkoutTab() {
   // ── Main render ───────────────────────────────────────────────────────────
   return (
     <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: BG }}>
+      {/* ── Rank-up toast — floats above the header, auto-dismisses ── */}
+      {rankUpFlash && (
+        <MotiView
+          from={{ opacity: 0, translateY: -8 }}
+          animate={{ opacity: 1, translateY: 0 }}
+          transition={{ type: "timing", duration: 220 }}
+          style={{
+            position: "absolute", top: insets.top + 8, left: GUTTER, right: GUTTER, zIndex: 10,
+            backgroundColor: "rgba(204,255,0,0.12)", borderWidth: 1, borderColor: "rgba(204,255,0,0.4)",
+            borderRadius: 16, paddingVertical: 12, paddingHorizontal: 16,
+            flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+            shadowColor: VOLT, shadowOpacity: 0.3, shadowRadius: 16, shadowOffset: { width: 0, height: 0 },
+          }}
+        >
+          <Check size={14} color={VOLT} strokeWidth={3} />
+          <Text style={{ fontSize: 12, fontWeight: "900", color: VOLT, textTransform: "uppercase", letterSpacing: 0.3 }}>
+            Rango ascendido · {rankUpFlash}
+          </Text>
+        </MotiView>
+      )}
+
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: showLatch ? 190 : 160 }}
@@ -222,6 +259,26 @@ export default function WorkoutTab() {
             style={{ color: VOLT, fontWeight: "700", fontSize: 14, textTransform: "uppercase", textAlign: "right", letterSpacing: 0.5, fontVariant: ["tabular-nums"] }}
           >
             {durationStr}{"\n"}{lifecycleLabel}
+          </Text>
+        </View>
+
+        {/* ── Rank badge + XP progress — local-only engagement chrome, not a
+             coach-visible metric (see lib/gamification.tsx). ── */}
+        <View
+          style={{
+            ...GLASS, borderRadius: 16, marginHorizontal: GUTTER, marginTop: 10,
+            paddingHorizontal: 14, paddingVertical: 10,
+            flexDirection: "row", alignItems: "center", gap: 10,
+          }}
+        >
+          <Text style={{ fontSize: 12, fontWeight: "900", letterSpacing: 0.3, color: "#fff", textTransform: "uppercase" }}>
+            {currentRank}
+          </Text>
+          <View style={{ flex: 1, height: 4, borderRadius: 2, backgroundColor: SEG_OFF, overflow: "hidden" }}>
+            <View style={{ width: `${progressPct}%`, height: "100%", borderRadius: 2, backgroundColor: VOLT }} />
+          </View>
+          <Text className="font-mono" style={{ fontSize: 10, color: SILVER, fontVariant: ["tabular-nums"] }}>
+            {nextThresholdXP !== null ? `${progressPct}%` : "MAX"}
           </Text>
         </View>
 
@@ -359,13 +416,18 @@ export default function WorkoutTab() {
           RUTINA DEL DÍA
         </Text>
 
-        {/* Unassigned slate — coach hasn't programmed today's calendar day.
-            §3: premium glassmorphic banner, verbatim tactical copy. */}
+        {/* Rest day — resolveRoutineDay() (lib/workout.tsx) found no routine
+            pinned or ordinally scheduled for today's weekday. Framed as a
+            deliberate rest day rather than a raw "unassigned" error state,
+            since for most students most days genuinely are rest days. */}
         {!hasAssignment && (
-          <View style={{ ...GLASS, borderRadius: 24, marginHorizontal: GUTTER, padding: 24, alignItems: "center", gap: 10 }}>
-            <Activity size={22} color={SILVER} strokeWidth={1.5} />
-            <Text className="text-center" style={{ fontSize: 12, fontWeight: "800", color: SILVER }}>
-              Sin programación asignada para este día
+          <View style={{ ...GLASS, borderRadius: 24, marginHorizontal: GUTTER, padding: 28, alignItems: "center", gap: 12 }}>
+            <Moon size={26} color={CYAN} strokeWidth={1.5} />
+            <Text style={{ ...athletic, fontSize: 20, color: "#fff", textAlign: "center" }}>
+              Día de descanso
+            </Text>
+            <Text className="text-center" style={{ fontSize: 12, fontWeight: "700", color: SILVER, lineHeight: 18 }}>
+              Tu coach no programó entrenamiento para hoy. Aprovecha para recuperar — el músculo crece en el descanso, no solo en el gimnasio.
             </Text>
           </View>
         )}

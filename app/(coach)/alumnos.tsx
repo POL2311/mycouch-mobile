@@ -1,9 +1,10 @@
 import {
   View, Text, TextInput, TouchableOpacity, Pressable, ScrollView, Modal, ActivityIndicator,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useMemo, useCallback } from "react";
-import { RefreshCw, Plus, Check, X } from "lucide-react-native";
+import { router } from "expo-router";
+import { RefreshCw, Plus, Check, X, ChevronRight } from "lucide-react-native";
 import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
 import {
@@ -45,27 +46,41 @@ function NewStudentSheet({ visible, onClose, onCreated }: { visible: boolean; on
   const { token } = useAuth();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [stage, setStage] = useState<Stage>("Volumen");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canSave = name.trim().length > 0 && email.trim().includes("@");
+  // The app has no invite/magic-link/forgot-password flow anywhere — the
+  // only way any account authenticates is login(email, password) in
+  // lib/session.tsx. Without a password set here, a newly created student
+  // has no way to ever log in, and the backend may well be rejecting the
+  // request outright for a missing required field.
+  const canSave = name.trim().length > 0 && email.trim().includes("@") && password.length >= 6;
 
   const save = useCallback(async () => {
     if (!canSave || !token) return;
     setSaving(true);
     setError(null);
     try {
-      await api("/api/students", { method: "POST", token, body: { name: name.trim(), email: email.trim(), stage, stageNumber: 1 } });
-      setName(""); setEmail(""); setStage("Volumen");
+      await api("/api/students", { method: "POST", token, body: { name: name.trim(), email: email.trim(), password, stage, stageNumber: 1 } });
+      setName(""); setEmail(""); setPassword(""); setStage("Volumen");
       onCreated();
       onClose();
     } catch (e) {
+      // Unlike every other coach mutation in lib/coach.tsx (changeStage,
+      // setStudentPaymentStatus, createTemplate, ...), student creation has
+      // no exported/typed helper and no blueprint-spec reference comment —
+      // it's the one mutation in this codebase never verified against a
+      // confirmed backend contract. api()'s error message now covers
+      // error/message/errors[] shapes (see lib/api.ts), but logging the raw
+      // failure here too in case the real shape is something else entirely.
+      console.error("[NewStudentSheet] POST /api/students failed:", e);
       setError(e instanceof Error ? e.message : "No se pudo crear el alumno.");
     } finally {
       setSaving(false);
     }
-  }, [canSave, token, name, email, stage, onCreated, onClose]);
+  }, [canSave, token, name, email, password, stage, onCreated, onClose]);
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -83,6 +98,11 @@ function NewStudentSheet({ visible, onClose, onCreated }: { visible: boolean; on
           <TextInput
             value={email} onChangeText={setEmail} placeholder="Correo electrónico" placeholderTextColor="#52525b"
             keyboardType="email-address" autoCapitalize="none"
+            style={{ ...GLASS, borderRadius: 10, padding: 12, color: "#fff", marginBottom: 10 }}
+          />
+          <TextInput
+            value={password} onChangeText={setPassword} placeholder="Contraseña inicial (mín. 6 caracteres)" placeholderTextColor="#52525b"
+            secureTextEntry autoCapitalize="none"
             style={{ ...GLASS, borderRadius: 10, padding: 12, color: "#fff", marginBottom: 10 }}
           />
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
@@ -115,6 +135,7 @@ function NewStudentSheet({ visible, onClose, onCreated }: { visible: boolean; on
 }
 
 export default function AlumnosScreen() {
+  const insets = useSafeAreaInsets();
   const { students, isLoading, refresh } = useCoach();
   const [syncing, setSyncing] = useState(false);
   const [query, setQuery] = useState("");
@@ -205,7 +226,18 @@ export default function AlumnosScreen() {
       {isLoading ? (
         <ActivityIndicator color={VOLT} style={{ marginTop: 30 }} />
       ) : (
-        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: selected.size > 0 ? 110 : 32 }} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={{
+            paddingHorizontal: 20,
+            // Clears the CoachDock (84 + insets.bottom, absolute bottom:0)
+            // plus the floating bulk-action bar when one or more rows are
+            // selected — the ScrollView's own content sits underneath both,
+            // so without this the last rows and the action bar itself both
+            // render partially or fully behind the opaque dock.
+            paddingBottom: 84 + insets.bottom + (selected.size > 0 ? 90 : 16),
+          }}
+          showsVerticalScrollIndicator={false}
+        >
           {filtered.length === 0 ? (
             <View style={{ ...GLASS, borderRadius: 14, paddingVertical: 30, alignItems: "center" }}>
               <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 1, color: "#71717a" }}>[ SIN RESULTADOS ]</Text>
@@ -258,6 +290,18 @@ export default function AlumnosScreen() {
                         </View>
                       </View>
                     </Pressable>
+
+                    {/* Detail drill-down — separate affordance from the row
+                        tap (which stays wired to the existing quick
+                        change-stage action) and the checkbox (bulk select),
+                        so neither existing behavior is disturbed. */}
+                    <Pressable
+                      onPress={() => router.push({ pathname: "/(coach)/alumno/[id]", params: { id: s.id } })}
+                      hitSlop={8}
+                      style={{ marginTop: 2, padding: 2 }}
+                    >
+                      <ChevronRight size={18} color={SILVER} />
+                    </Pressable>
                   </View>
                 </View>
               );
@@ -266,9 +310,13 @@ export default function AlumnosScreen() {
         </ScrollView>
       )}
 
-      {/* Bulk action bar — "usa las acciones en lote de la lista de alumnos" */}
+      {/* Bulk action bar — "usa las acciones en lote de la lista de alumnos".
+          Floats above the 84+insets.bottom CoachDock (same offset pattern as
+          app/(portal)/index.tsx's floor latch) — at a bare `bottom: 24` this
+          button rendered entirely underneath the opaque tab bar, invisible
+          and untappable. */}
       {selected.size > 0 && (
-        <View style={{ position: "absolute", bottom: 24, left: 20, right: 20 }}>
+        <View style={{ position: "absolute", bottom: 84 + insets.bottom + 12, left: 20, right: 20 }}>
           <TouchableOpacity
             activeOpacity={0.8}
             onPress={() => setWizardOpen(true)}
