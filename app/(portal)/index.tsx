@@ -4,7 +4,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
 import { MotiView } from "moti";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { PulseButton } from "@/components/ui/PulseButton";
 import * as Haptics from "expo-haptics";
 import { Play, Pause, Check, Moon } from "lucide-react-native";
@@ -14,6 +14,7 @@ import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
 import { useWorkout, todayDateStr } from "@/lib/workout";
 import { useGamification } from "@/lib/gamification";
+import { useMotivation } from "@/lib/motivation";
 import { VOLT, WATER_TARGET_ML, WATER_DOSE_ML } from "@/components/workout-ui";
 
 // ── Cinema Bento card imagery — placeholder gym stock photography keyed by
@@ -77,12 +78,13 @@ export default function WorkoutTab() {
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const {
-    exercises, dayFocus, totalEx, hasAssignment, isLoading,
+    exercises, dayFocus, semanaLabel, totalEx, hasAssignment, isLoading,
     lifecycle, setLifecycle, watchStatus, doneSets, doneEx, biometrics,
     workoutDone, setActiveExIdx, handleFinalizar,
     durationStr, allDone, sortedIndices, lifecycleLabel,
   } = useWorkout();
   const { currentRank, progressPct, nextThresholdXP, addXP, rankUpFlash, clearRankUpFlash } = useGamification();
+  const { celebrate } = useMotivation();
 
   // Auto-dismiss the rank-up toast a couple seconds after it fires.
   useEffect(() => {
@@ -90,6 +92,17 @@ export default function WorkoutTab() {
     const t = setTimeout(clearRankUpFlash, 2600);
     return () => clearTimeout(t);
   }, [rankUpFlash, clearRankUpFlash]);
+
+  // Disparador de éxito — "guardó la última serie del día": allDone (lib/workout.tsx)
+  // se pone true en cuanto se completa el último set del último ejercicio,
+  // ANTES de que el alumno toque FINALIZAR — ese es el momento real de logro,
+  // no el botón administrativo de cerrar la sesión. Guard false→true para no
+  // repetir el modal en cada render mientras allDone se mantiene true.
+  const prevAllDone = useRef(false);
+  useEffect(() => {
+    if (allDone && !prevAllDone.current) celebrate();
+    prevAllDone.current = allDone;
+  }, [allDone, celebrate]);
 
   // ── Hydration Táctica (lobby-only; independent of the exercise focus flow) ─
   const [waterMl,   setWaterMl]   = useState(0);
@@ -253,6 +266,11 @@ export default function WorkoutTab() {
             <Text style={{ ...athletic, fontSize: 36, lineHeight: 38, letterSpacing: -1, color: "#ffffff", marginTop: 2 }}>
               {dayFocus}
             </Text>
+            {!!semanaLabel && (
+              <Text className="font-mono" style={{ fontSize: 10, letterSpacing: 1, color: CYAN, textTransform: "uppercase", marginTop: 4 }}>
+                {semanaLabel}
+              </Text>
+            )}
           </View>
           <Text
             className="font-mono"

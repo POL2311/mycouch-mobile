@@ -1,11 +1,16 @@
 import {
-  View, Text, TextInput, TouchableOpacity, ScrollView, Modal, ActivityIndicator,
+  View, Text, TextInput, TouchableOpacity, Pressable, ScrollView, Modal, ActivityIndicator,
   KeyboardAvoidingView, Platform,
 } from "react-native";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
+import * as Haptics from "expo-haptics";
 import { Plus, X, Trash2 } from "lucide-react-native";
 import { useAuth } from "@/lib/session";
-import { assignStudentDiet, type DietData, type DietMeal } from "@/lib/coach";
+import { assignStudentDiet } from "@/lib/coach";
+import {
+  DIAS_SEMANA, DIA_LABEL, diaSemanaDeHoy, dietaEstaVacia, genCoachClientId,
+  type DiaSemana, type DietaJson, type ConfiguracionDiaDieta, type Comida,
+} from "@/types/coach-client";
 
 // Official palette (§3 of the assignment spec) — mirrored locally, same
 // convention as TemplateEditorModal/ChangeStageModal, since components/coach
@@ -21,91 +26,119 @@ const FIELD = {
   borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, color: "#fff", fontSize: 13,
 } as const;
 
-const EMPTY_MEAL = (): DietMeal => ({ name: "", time: "", calories: 0, protein: 0, carbs: 0, fat: 0, items: [] });
+// Lunes-primero para la barra de días — el modelo de datos en sí no depende
+// de este orden (configuracionPorDia es un objeto, no un arreglo).
+const ORDEN_TABS: DiaSemana[] = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"];
 
-// items[] (one ingredient per line elsewhere in the app, e.g. TemplateEditorModal)
-// is edited here as a single free-text "Descripción/Ingredientes" box, per the
-// assignment spec's wording — split back into items[] on save so the shape
-// written to dietJson is identical to what templates and the student portal
-// already expect (DietMeal.items: string[]).
-function descriptionFor(meal: DietMeal): string {
-  return meal.items.join("\n");
+const EMPTY_COMIDA = (): Comida => ({
+  id: genCoachClientId("comida"), hora: "", nombre: "", descripcion: "", kcal: 0,
+  macros: { protein: 0, carbs: 0, fat: 0 },
+});
+
+function descriptionFor(c: Comida): string {
+  return c.descripcion;
 }
 
 interface Props {
   visible: boolean;
   studentId: string;
-  // Pass the student's currently-parsed diet (parseDiet(student.dietJson)) to
-  // pre-fill for editing; omit/pass the "Dieta no asignada" placeholder for a
-  // fresh assignment — both render the same form.
-  initialDiet?: DietData;
+  // Siempre la dieta ya parseada (parseDietaJson(student.dietJson)) — puede
+  // venir vacía (emptyDietaJson()) para una primera asignación; ambos casos
+  // usan el mismo formulario.
+  initialDieta: DietaJson;
   onClose: () => void;
-  onSaved: (diet: DietData) => void;
+  onSaved: (dieta: DietaJson) => void;
 }
 
-export default function AssignDietModal({ visible, studentId, initialDiet, onClose, onSaved }: Props) {
+export default function AssignDietModal({ visible, studentId, initialDieta, onClose, onSaved }: Props) {
   const { token } = useAuth();
-  const hasInitial = !!initialDiet && initialDiet.name !== "Dieta no asignada";
+  const hasInitial = !dietaEstaVacia(initialDieta);
 
-  const [name, setName]                   = useState(hasInitial ? initialDiet!.name : "");
-  const [totalCalories, setTotalCalories] = useState(hasInitial ? String(initialDiet!.totalCalories) : "");
-  const [protein, setProtein]             = useState(hasInitial ? String(initialDiet!.macros.protein) : "");
-  const [carbs, setCarbs]                 = useState(hasInitial ? String(initialDiet!.macros.carbs) : "");
-  const [fat, setFat]                     = useState(hasInitial ? String(initialDiet!.macros.fat) : "");
-  const [meals, setMeals] = useState<DietMeal[]>(
-    hasInitial && initialDiet!.meals.length > 0 ? initialDiet!.meals : [EMPTY_MEAL()],
+  const [nombre, setNombre] = useState(hasInitial ? initialDieta.nombre : "");
+  const [dias, setDias] = useState<Record<DiaSemana, ConfiguracionDiaDieta>>(
+    () => ({ ...initialDieta.configuracionPorDia }),
   );
+  const [selectedDia, setSelectedDia] = useState<DiaSemana>(diaSemanaDeHoy());
   const [saving, setSaving] = useState(false);
-  const [error, setError]   = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const canSave = name.trim().length > 0;
+  const dia = dias[selectedDia];
+  const canSave = nombre.trim().length > 0;
 
-  const addMeal    = useCallback(() => setMeals(m => [...m, EMPTY_MEAL()]), []);
-  const removeMeal = useCallback((i: number) => setMeals(m => m.filter((_, idx) => idx !== i)), []);
-  const patchMeal   = useCallback((i: number, patch: Partial<DietMeal>) => {
-    setMeals(m => m.map((meal, idx) => idx === i ? { ...meal, ...patch } : meal));
-  }, []);
-  const patchDescription = useCallback((i: number, text: string) => {
-    setMeals(m => m.map((meal, idx) => idx === i ? { ...meal, items: text.split("\n") } : meal));
-  }, []);
+  const patchDia = useCallback((patch: Partial<ConfiguracionDiaDieta>) => {
+    setDias(d => ({ ...d, [selectedDia]: { ...d[selectedDia]!, ...patch } }));
+  }, [selectedDia]);
+
+  const addComida = useCallback(() => {
+    patchDia({ comidas: [...dia!.comidas, EMPTY_COMIDA()] });
+  }, [dia, patchDia]);
+  const removeComida = useCallback((i: number) => {
+    patchDia({ comidas: dia!.comidas.filter((_, idx) => idx !== i) });
+  }, [dia, patchDia]);
+  const patchComida = useCallback((i: number, patch: Partial<Comida>) => {
+    patchDia({ comidas: dia!.comidas.map((c, idx) => idx === i ? { ...c, ...patch } : c) });
+  }, [dia, patchDia]);
+
+  const copiarATodos = useCallback(() => {
+    Haptics.selectionAsync().catch(() => {});
+    const fuente = dias[selectedDia]!;
+    setDias(() => {
+      const next = {} as Record<DiaSemana, ConfiguracionDiaDieta>;
+      for (const d of DIAS_SEMANA) {
+        next[d] = {
+          kcalObjetivo: fuente.kcalObjetivo,
+          macros: { ...fuente.macros },
+          comidas: fuente.comidas.map(c => ({ ...c, id: genCoachClientId("comida") })),
+        };
+      }
+      return next;
+    });
+  }, [dias, selectedDia]);
+
+  const diasConComidas = useMemo(
+    () => new Set(DIAS_SEMANA.filter(d => dias[d]?.comidas.length > 0)),
+    [dias],
+  );
 
   const save = useCallback(async () => {
     if (!canSave || !token) return;
     setSaving(true);
     setError(null);
     try {
-      const cleanedMeals = meals
-        .filter(m => m.name.trim().length > 0)
-        .map(m => ({ ...m, name: m.name.trim(), items: m.items.map(i => i.trim()).filter(Boolean) }));
-      const diet: DietData = {
-        name: name.trim(),
-        totalCalories: parseFloat(totalCalories) || 0,
-        macros: {
-          protein: parseFloat(protein) || 0,
-          carbs: parseFloat(carbs) || 0,
-          fat: parseFloat(fat) || 0,
-        },
-        meals: cleanedMeals,
-      };
-      // PUT /api/students/[id] { detailUpdates: { diet } } → backend does
-      // JSON.stringify(diet) into dietJson directly (src/lib/db.ts
-      // updateStudent) — same field the student's /api/mobile/portal reads
-      // back and normalises for the Nutrición tab.
-      await assignStudentDiet(studentId, diet, token);
-      onSaved(diet);
+      const configuracionPorDia = {} as Record<DiaSemana, ConfiguracionDiaDieta>;
+      for (const d of DIAS_SEMANA) {
+        const cfg = dias[d]!;
+        configuracionPorDia[d] = {
+          kcalObjetivo: cfg.kcalObjetivo,
+          macros: cfg.macros,
+          comidas: cfg.comidas
+            .filter(c => c.nombre.trim().length > 0)
+            .map(c => ({ ...c, nombre: c.nombre.trim(), descripcion: c.descripcion.trim() })),
+        };
+      }
+      const dieta: DietaJson = { nombre: nombre.trim(), configuracionPorDia };
+      // PUT /api/students/[id] { detailUpdates: { diet: dieta } } → el
+      // backend hace JSON.stringify(dieta) directo en dietJson (sin validar
+      // forma) — el alumno lo vuelve a leer completo vía GET
+      // /api/students/{su-id} (lib/portal.tsx fetchFullAssignment), no vía
+      // /api/mobile/portal, que recortaría configuracionPorDia.
+      await assignStudentDiet(studentId, dieta, token);
+      onSaved(dieta);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo asignar la dieta.");
     } finally {
       setSaving(false);
     }
-  }, [canSave, token, studentId, name, totalCalories, protein, carbs, fat, meals, onSaved, onClose]);
+  }, [canSave, token, studentId, nombre, dias, onSaved, onClose]);
+
+  if (!dia) return null;
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.95)", paddingTop: 60 }}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginBottom: 18 }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginBottom: 14 }}>
             <Text style={{ ...athletic, fontSize: 18, color: "#fff" }}>
               {hasInitial ? "Editar dieta" : "Asignar dieta"}
             </Text>
@@ -114,33 +147,67 @@ export default function AssignDietModal({ visible, studentId, initialDiet, onClo
             </TouchableOpacity>
           </View>
 
+          {/* ── Barra de días ── */}
+          <ScrollView
+            horizontal showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: 20, gap: 8, paddingBottom: 14 }}
+          >
+            {ORDEN_TABS.map(d => {
+              const active = d === selectedDia;
+              return (
+                <Pressable
+                  key={d}
+                  onPress={() => { Haptics.selectionAsync().catch(() => {}); setSelectedDia(d); }}
+                  style={{
+                    paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999,
+                    backgroundColor: active ? VOLT : CARD_BG,
+                    borderWidth: 1, borderColor: active ? VOLT : BORDER,
+                    flexDirection: "row", alignItems: "center", gap: 6,
+                  }}
+                >
+                  <Text className="font-black" style={{ fontSize: 11, color: active ? "#000" : "#d4d4d8" }}>
+                    {DIA_LABEL[d].slice(0, 3).toUpperCase()}
+                  </Text>
+                  {diasConComidas.has(d) && (
+                    <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: active ? "#000" : VOLT }} />
+                  )}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+
           <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
             <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: MUTED, marginBottom: 6 }}>
               Nombre del plan
             </Text>
             <TextInput
-              value={name}
-              onChangeText={setName}
+              value={nombre}
+              onChangeText={setNombre}
               placeholder="Ej. Hipertrofia Limpia"
               placeholderTextColor="#52525b"
               style={{ ...FIELD, marginBottom: 18 }}
             />
 
-            <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: MUTED, marginBottom: 6 }}>
-              Objetivos diarios
-            </Text>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: MUTED }}>
+                Objetivos — {DIA_LABEL[selectedDia]}
+              </Text>
+              <TouchableOpacity onPress={copiarATodos} hitSlop={8}>
+                <Text style={{ fontSize: 10, color: VOLT, fontWeight: "800" }}>Copiar a todos los días</Text>
+              </TouchableOpacity>
+            </View>
             <View style={{ flexDirection: "row", gap: 10, marginBottom: 22 }}>
               {([
-                ["Kcal", totalCalories, setTotalCalories],
-                ["Prot (g)", protein, setProtein],
-                ["Carb (g)", carbs, setCarbs],
-                ["Gra (g)", fat, setFat],
+                ["Kcal", dia.kcalObjetivo, (v: number) => patchDia({ kcalObjetivo: v })],
+                ["Prot (g)", dia.macros.protein, (v: number) => patchDia({ macros: { ...dia.macros, protein: v } })],
+                ["Carb (g)", dia.macros.carbs, (v: number) => patchDia({ macros: { ...dia.macros, carbs: v } })],
+                ["Gra (g)", dia.macros.fat, (v: number) => patchDia({ macros: { ...dia.macros, fat: v } })],
               ] as const).map(([label, value, setter]) => (
                 <View key={label} style={{ flex: 1 }}>
                   <Text style={{ fontSize: 9, color: MUTED, marginBottom: 4 }}>{label}</Text>
                   <TextInput
-                    value={value}
-                    onChangeText={setter}
+                    value={String(value || "")}
+                    onChangeText={t => setter(parseFloat(t) || 0)}
                     keyboardType="numeric"
                     placeholder="0"
                     placeholderTextColor="#52525b"
@@ -151,44 +218,44 @@ export default function AssignDietModal({ visible, studentId, initialDiet, onClo
             </View>
 
             <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: MUTED, marginBottom: 10 }}>
-              Comidas ({meals.length})
+              Comidas de {DIA_LABEL[selectedDia]} ({dia.comidas.length})
             </Text>
-            {meals.map((meal, mi) => (
-              <View key={mi} style={{ backgroundColor: CARD_BG, borderWidth: 1, borderColor: BORDER, borderRadius: 14, padding: 14, marginBottom: 12 }}>
+            {dia.comidas.map((comida, mi) => (
+              <View key={comida.id} style={{ backgroundColor: CARD_BG, borderWidth: 1, borderColor: BORDER, borderRadius: 14, padding: 14, marginBottom: 12 }}>
                 <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
                   <TextInput
-                    value={meal.name}
-                    onChangeText={t => patchMeal(mi, { name: t })}
+                    value={comida.nombre}
+                    onChangeText={t => patchComida(mi, { nombre: t })}
                     placeholder="Nombre (Desayuno Anabólico)"
                     placeholderTextColor="#52525b"
                     style={{ ...FIELD, flex: 2 }}
                   />
                   <TextInput
-                    value={meal.time}
-                    onChangeText={t => patchMeal(mi, { time: t })}
+                    value={comida.hora}
+                    onChangeText={t => patchComida(mi, { hora: t })}
                     placeholder="Hora"
                     placeholderTextColor="#52525b"
                     style={{ ...FIELD, flex: 1 }}
                   />
                 </View>
                 <TextInput
-                  value={String(meal.calories || "")}
-                  onChangeText={t => patchMeal(mi, { calories: parseFloat(t) || 0 })}
+                  value={String(comida.kcal || "")}
+                  onChangeText={t => patchComida(mi, { kcal: parseFloat(t) || 0 })}
                   placeholder="Kcal de esta comida (opcional)"
                   placeholderTextColor="#52525b"
                   keyboardType="numeric"
                   style={{ ...FIELD, marginBottom: 8 }}
                 />
                 <TextInput
-                  value={descriptionFor(meal)}
-                  onChangeText={t => patchDescription(mi, t)}
+                  value={descriptionFor(comida)}
+                  onChangeText={t => patchComida(mi, { descripcion: t })}
                   placeholder={"Descripción / ingredientes (uno por línea)\nEj. 4 claras + 2 huevos enteros\nAvena 60g"}
                   placeholderTextColor="#52525b"
                   multiline
                   numberOfLines={3}
                   style={{ ...FIELD, minHeight: 72, textAlignVertical: "top" }}
                 />
-                <TouchableOpacity onPress={() => removeMeal(mi)} style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10 }}>
+                <TouchableOpacity onPress={() => removeComida(mi)} style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10 }}>
                   <Trash2 size={12} color="#f87171" />
                   <Text style={{ fontSize: 10, color: "#f87171" }}>Eliminar comida</Text>
                 </TouchableOpacity>
@@ -196,7 +263,7 @@ export default function AssignDietModal({ visible, studentId, initialDiet, onClo
             ))}
             <TouchableOpacity
               activeOpacity={0.7}
-              onPress={addMeal}
+              onPress={addComida}
               style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, borderRadius: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.15)", borderStyle: "dashed", paddingVertical: 12 }}
             >
               <Plus size={14} color={VOLT} />

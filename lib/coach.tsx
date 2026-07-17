@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
+import { type DietaJson, type RoutineJson } from "@/types/coach-client";
+import { MOTIVATION_PREFIX } from "@/lib/portal";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  COACH DATA LAYER — types, never-throw parsers, and API contracts mirrored
@@ -152,6 +154,13 @@ export interface CoachStudent {
   prSquat: number;
   prDeadlift: number;
   prBench: number;
+  // toStudent() on the backend always includes this (coachId ?? undefined) —
+  // never previously declared here because nothing needed it client-side
+  // until postMotivationalPhrase() required the coach's own Coach.id, which
+  // no endpoint this app calls otherwise exposes back to the coach's own
+  // session. Any roster row works as a source since a coach's whole roster
+  // shares one coachId.
+  coachId?: string;
   scheduledChange?: ScheduledChangeRow | null;
 }
 
@@ -371,6 +380,34 @@ export function fetchEjercicios(token: string): Promise<EjercicioDTO[]> {
   return api<EjercicioDTO[]>("/api/ejercicios", { token });
 }
 
+// POST /api/ejercicios — confirmed real and already role/ownership-checked
+// server-side (../mycouch/src/app/api/ejercicios/route.ts): COACH-only,
+// accepts a plain JSON body (imageUrl/videoUrl as pasted URL strings — no
+// multipart upload path exists on the mobile client). `@@unique([coachId,
+// name])` on the backend means a duplicate name 500s; the catalog screen
+// surfaces that via the normal api() error message.
+export function createEjercicio(
+  data: { name: string; muscleGroup: string; equipment: string; bodyweight: boolean; imageUrl?: string; videoUrl?: string },
+  token: string,
+): Promise<EjercicioDTO> {
+  return api<EjercicioDTO>("/api/ejercicios", { method: "POST", token, body: data });
+}
+
+// PUT /api/ejercicios/[id] — same body shape, ownership-checked (COACH must
+// own the row, or ADMIN).
+export function updateEjercicio(
+  id: string,
+  data: { name: string; muscleGroup: string; equipment: string; bodyweight: boolean; imageUrl?: string; videoUrl?: string },
+  token: string,
+): Promise<EjercicioDTO> {
+  return api<EjercicioDTO>(`/api/ejercicios/${id}`, { method: "PUT", token, body: data });
+}
+
+// DELETE /api/ejercicios/[id] — ownership-checked, same as PUT.
+export function deleteEjercicio(id: string, token: string): Promise<{ success: boolean }> {
+  return api<{ success: boolean }>(`/api/ejercicios/${id}`, { method: "DELETE", token });
+}
+
 // §2.2 POST /api/students/change-stage — the assignment mutation. Both the
 // ChangeStageModal and the BulkPeriodizationWizard send this exact shape.
 export function changeStage(payload: ChangeStagePayload, token: string): Promise<{ success: boolean }> {
@@ -412,16 +449,50 @@ export function unlinkStudent(studentId: string, token: string): Promise<{ succe
 // on the student's OWN dietJson (src/lib/db.ts updateStudent(): `if
 // (detailUpdates.diet !== undefined) data.dietJson = JSON.stringify(...)`).
 // Distinct from createTemplate/updateTemplate, which write to the reusable
-// Templates library instead — this is the one-off "asignar directo a este
-// alumno" path. The student's /api/mobile/portal reads the same dietJson
-// column back, normalised, so this is the single source of truth for both
-// the coach's Nutrición tab and the student's Nutrición screen.
+// Templates library instead — this is the "asignar directo a este alumno"
+// path, using the new per-day contract (types/coach-client.ts). The student
+// reads this same dietJson column back via GET /api/students/[id] (its own
+// record — see lib/portal.tsx's fetchFullStudentDetail), NOT via
+// /api/mobile/portal, whose field-stripping normalizer would silently drop
+// anything outside its old flat-meal allowlist.
 export function assignStudentDiet(
-  studentId: string, diet: DietData, token: string,
+  studentId: string, diet: DietaJson, token: string,
 ): Promise<{ success: boolean }> {
   return api<{ success: boolean }>(`/api/students/${studentId}`, {
     method: "PUT", token, body: { detailUpdates: { diet } } as unknown as Record<string, unknown>,
   });
+}
+
+// PUT /api/students/[id] { detailUpdates: { routine } } — direct routine
+// assignment, same mechanism as assignStudentDiet above (src/lib/db.ts
+// updateStudent(): `if (detailUpdates.routine !== undefined) data.routineJson
+// = JSON.stringify(...)`, confirmed real, zero backend changes needed). This
+// is the ONLY path that can carry per-set minWeight/targetReps end to end —
+// ChangeStageModal's template-based routineTemplateId path writes the OLD
+// flat RoutineData shape and has no concept of strict per-set thresholds.
+export function assignStudentRoutine(
+  studentId: string, routine: RoutineJson, token: string,
+): Promise<{ success: boolean }> {
+  return api<{ success: boolean }>(`/api/students/${studentId}`, {
+    method: "PUT", token, body: { detailUpdates: { routine } } as unknown as Record<string, unknown>,
+  });
+}
+
+// Used by ChangeStageModal to warn a coach before a template-based routine
+// assignment silently overwrites a routine built with the strict per-set
+// builder (both write the same routineJson column — see the module doc
+// comment in types/coach-client.ts for why they aren't unified).
+export function hasStrictAssignment(routineJson: string): boolean {
+  if (!routineJson) return false;
+  try {
+    const parsed = JSON.parse(routineJson);
+    // `semanas` = periodización actual; `configuracionPorDia` = formato de
+    // la sesión anterior a la periodización (todavía puede existir en datos
+    // no re-guardados) — ambos son "asignación directa estricta".
+    return parsed?.semanas !== undefined || parsed?.configuracionPorDia !== undefined;
+  } catch {
+    return false;
+  }
 }
 
 // PATCH /api/students/[id] — toggles the real access gate (isActive), fully
@@ -469,11 +540,39 @@ export function isRedFlag(student: Pick<CoachStudent, "lastWeighIn" | "isActive"
 
 // GET /api/coach/notices (take 50) + DELETE /api/coach/notices/[id]
 // (ownership-checked) — Tablón de Avisos management.
+//
+// Bug fix: the backend wraps this response as `{ notices: [...] }`
+// (../mycouch/src/app/api/coach/notices/route.ts), not a bare array — this
+// used to call api<CoachNotice[]>(...) directly and every caller's
+// `Array.isArray(rows) ? rows : []` guard silently discarded the wrapped
+// object, so the coach's own Tablón de Avisos always rendered empty
+// regardless of what was actually in the room. Unwrapped here once so every
+// consumer (sala.tsx, and the new motivational-phrases section) gets a real
+// array.
 export function fetchCoachNotices(token: string): Promise<CoachNotice[]> {
-  return api<CoachNotice[]>("/api/coach/notices", { token });
+  return api<{ notices: CoachNotice[] }>("/api/coach/notices", { token })
+    .then(res => Array.isArray(res.notices) ? res.notices : []);
 }
 export function deleteCoachNotice(id: string, token: string): Promise<{ success: boolean }> {
   return api<{ success: boolean }>(`/api/coach/notices/${id}`, { method: "DELETE", token });
+}
+
+// POST /api/community/messages — confirmed real, role-checked (COACH-only)
+// server-side, but never previously called from ANY frontend (mobile or
+// web). Used as the persistence for "frases motivacionales" (perfil/index.tsx):
+// GroupMessage rows created here are exactly what a student already reads
+// via GET /api/mobile/community/notices (correctly coachId-scoped
+// server-side — unlike GET /api/templates, which returns every coach's
+// templates with no filter, ruled out for this exact reason). The backend
+// takes `coachId` verbatim from the body (not derived from the session) —
+// callers must supply the coach's own CoachStudent.coachId, read off any
+// roster row (see perfil/index.tsx).
+export function postMotivationalPhrase(
+  coachId: string, phrase: string, senderName: string, token: string,
+): Promise<{ id: string }> {
+  return api<{ id: string }>("/api/community/messages", {
+    method: "POST", token, body: { coachId, content: `${MOTIVATION_PREFIX}${phrase}`, senderName },
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

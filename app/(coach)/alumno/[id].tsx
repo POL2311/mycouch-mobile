@@ -7,13 +7,19 @@ import Svg, { Polyline, Circle } from "react-native-svg";
 import { useAuth } from "@/lib/session";
 import { ApiError } from "@/lib/api";
 import {
-  useCoach, STAGES, STAGE_COLORS, parseDiet, parseRoutine, ordinalScheduleLabel, paymentBucket,
-  setStudentActive, isRedFlag, daysSinceLastActivity, fetchStudentDetail,
+  useCoach, STAGES, STAGE_COLORS, paymentBucket,
+  setStudentActive, isRedFlag, daysSinceLastActivity, fetchStudentDetail, hasStrictAssignment,
   type CoachStudentDetail, type WeightHistoryPoint, type Stage,
 } from "@/lib/coach";
+import {
+  DIAS_SEMANA, DIA_LABEL, diaSemanaDeHoy, parseDietaJson, parseRoutineJson,
+  dietaEstaVacia, rutinaEstaVacia, NUMEROS_SEMANA, SEMANA_LABEL, semanaActualPorFecha,
+  type DiaSemana, type NumeroSemana,
+} from "@/types/coach-client";
 import { COACH_BG, COACH_CARD, COACH_BORDER, COACH_ACCENT, COACH_ALERT, COACH_MUTED, COACH_GOLD } from "../_layout";
 import ChangeStageModal from "@/components/coach/ChangeStageModal";
 import AssignDietModal from "@/components/coach/AssignDietModal";
+import AssignRoutineModal from "@/components/coach/AssignRoutineModal";
 
 const CARD = { backgroundColor: COACH_CARD, borderWidth: 1, borderColor: COACH_BORDER } as const;
 const athletic = { fontWeight: "900" as const, fontStyle: "italic" as const, textTransform: "uppercase" as const };
@@ -57,6 +63,76 @@ function SectionLabel({ children }: { children: string }) {
   );
 }
 
+// Lunes-primero para la barra de días — el modelo de datos (configuracionPorDia)
+// es un objeto indexado por DiaSemana, no depende de este orden de UI.
+const ORDEN_TABS: DiaSemana[] = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"];
+
+function WeekdayBar({ selected, onSelect, filled }: {
+  selected: DiaSemana; onSelect: (d: DiaSemana) => void; filled: Set<DiaSemana>;
+}) {
+  return (
+    <ScrollView
+      horizontal showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ gap: 8, paddingVertical: 4 }}
+      style={{ marginBottom: 4 }}
+    >
+      {ORDEN_TABS.map(d => {
+        const active = d === selected;
+        return (
+          <Pressable
+            key={d}
+            onPress={() => onSelect(d)}
+            style={{
+              paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999,
+              backgroundColor: active ? COACH_ACCENT : COACH_CARD,
+              borderWidth: 1, borderColor: active ? COACH_ACCENT : COACH_BORDER,
+              flexDirection: "row", alignItems: "center", gap: 6,
+            }}
+          >
+            <Text className="font-black" style={{ fontSize: 11, color: active ? "#000" : "#d4d4d8" }}>
+              {DIA_LABEL[d].slice(0, 3).toUpperCase()}
+            </Text>
+            {filled.has(d) && (
+              <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: active ? "#000" : COACH_ACCENT }} />
+            )}
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+// Selector de bloque de intensidad (Semana 1/2/3) — vive arriba de la barra
+// de días en la pestaña Entreno; la Nutrición no tiene periodización por
+// semanas (solo por día), así que esto no se reutiliza allí.
+function WeekBar({ selected, onSelect, filled }: {
+  selected: NumeroSemana; onSelect: (n: NumeroSemana) => void; filled: Set<NumeroSemana>;
+}) {
+  return (
+    <View style={{ flexDirection: "row", gap: 8, marginBottom: 10 }}>
+      {NUMEROS_SEMANA.map(n => {
+        const active = n === selected;
+        return (
+          <Pressable
+            key={n}
+            onPress={() => onSelect(n)}
+            style={{
+              flex: 1, paddingVertical: 9, borderRadius: 12, alignItems: "center",
+              backgroundColor: active ? COACH_ACCENT : COACH_CARD,
+              borderWidth: 1, borderColor: active ? COACH_ACCENT : COACH_BORDER,
+            }}
+          >
+            <Text className="font-black" style={{ fontSize: 11, color: active ? "#000" : "#fff" }}>
+              Semana {n}{filled.has(n) ? " ●" : ""}
+            </Text>
+            <Text style={{ fontSize: 9, color: active ? "#000" : COACH_MUTED, marginTop: 1 }}>{SEMANA_LABEL[n]}</Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 const CHART_W = 320, CHART_H = 120, CHART_PAD = 12;
 
 function WeightHistoryChart({ points }: { points: WeightHistoryPoint[] }) {
@@ -97,6 +173,14 @@ export default function AlumnoDetailScreen() {
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [assignRoutineOpen, setAssignRoutineOpen] = useState(false);
   const [assignDietOpen, setAssignDietOpen] = useState(false);
+  const [changeStageOpen, setChangeStageOpen] = useState(false);
+  const [selectedDia, setSelectedDia] = useState<DiaSemana>(diaSemanaDeHoy());
+  // Aterriza en la semana que el alumno está viviendo hoy según fechaInicio —
+  // requiere parsear routineJson una vez antes del early-return de abajo
+  // (student puede ser undefined ahí, parseRoutineJson nunca lanza).
+  const [selectedSemana, setSelectedSemana] = useState<NumeroSemana>(
+    () => semanaActualPorFecha(parseRoutineJson(student?.routineJson).fechaInicio),
+  );
 
   // GET /api/students/[id] → { student, detail } — confirmed contract, see
   // backend-context.md and fetchStudentDetail (lib/coach.tsx). A failure here
@@ -138,12 +222,22 @@ export default function AlumnoDetailScreen() {
   const stageColor    = STAGE_COLORS[student.stage] ?? COACH_MUTED;
   const bucket        = paymentBucket(student.paymentStatus);
   const delta         = +(student.currentWeight - student.previousWeight).toFixed(1);
-  const diet          = parseDiet(student.dietJson);
-  // Matches parseDiet's own EMPTY_DIET fallback (name "Dieta no asignada",
-  // no meals) — the one real "nothing's assigned yet" signal, whether that's
-  // because dietJson is "" or a genuinely empty {meals:[]} was saved.
-  const dietUnassigned = diet.meals.length === 0;
-  const routine       = parseRoutine(student.routineJson);
+  const dieta          = parseDietaJson(student.dietJson);
+  const rutina         = parseRoutineJson(student.routineJson);
+  // "Nada asignado en ningún día de la semana" — el único detector real de
+  // "sin asignar", tanto si dietJson/routineJson está vacío como si se
+  // guardó una configuración vacía a propósito.
+  const dietUnassigned    = dietaEstaVacia(dieta);
+  const rutinaUnassigned  = rutinaEstaVacia(rutina);
+  const diaCfgDieta   = dieta.configuracionPorDia[selectedDia];
+  const cfgSemana     = rutina.semanas[selectedSemana]?.configuracionPorDia;
+  const diaCfgRutina  = cfgSemana?.[selectedDia];
+  const diasConComidas = new Set(DIAS_SEMANA.filter(d => dieta.configuracionPorDia[d]?.comidas.length > 0));
+  const diasConEjercicios = new Set(DIAS_SEMANA.filter(d => (cfgSemana?.[d]?.ejercicios.length ?? 0) > 0));
+  const semanasConEjercicios = new Set(
+    NUMEROS_SEMANA.filter(n => DIAS_SEMANA.some(d => (rutina.semanas[n]?.configuracionPorDia[d]?.ejercicios.length ?? 0) > 0)),
+  );
+  const esHoy = selectedDia === diaSemanaDeHoy();
   const flagged       = isRedFlag(student);
   const inactiveDays  = daysSinceLastActivity(student.lastWeighIn);
   // CoachStudent.stage is a plain string (raw DB scalar), not the Stage
@@ -342,17 +436,15 @@ export default function AlumnoDetailScreen() {
         {tab === "entreno" && (
           <>
             <SectionLabel>Rutina asignada</SectionLabel>
-            {routine.days.length === 0 ? (
-              // Reuses ChangeStageModal (POST /api/students/change-stage) —
-              // the one CONFIRMED-working assignment path in this codebase,
-              // already accepting routineTemplateId — rather than guess yet
-              // another new endpoint the way setStudentActive's path has had
-              // to be guessed three times now.
+            <WeekBar selected={selectedSemana} onSelect={setSelectedSemana} filled={semanasConEjercicios} />
+            <WeekdayBar selected={selectedDia} onSelect={setSelectedDia} filled={diasConEjercicios} />
+
+            {rutinaUnassigned ? (
               <TouchableOpacity
                 activeOpacity={0.85}
                 onPress={() => setAssignRoutineOpen(true)}
                 style={{
-                  height: 52, borderRadius: 16, backgroundColor: COACH_ACCENT,
+                  height: 52, borderRadius: 16, backgroundColor: COACH_ACCENT, marginTop: 10,
                   flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
                 }}
               >
@@ -360,21 +452,51 @@ export default function AlumnoDetailScreen() {
                 <Text style={{ ...athletic, fontSize: 13, color: "#000" }}>Asignar rutina</Text>
               </TouchableOpacity>
             ) : (
-              <View style={{ ...CARD, borderRadius: 16, padding: 16 }}>
-                <Text className="font-black" style={{ fontSize: 14, color: "#fff" }}>{routine.name}</Text>
-                {routine.days.map((day, i) => (
-                  <View
-                    key={i}
-                    style={{
-                      paddingVertical: 8, borderTopWidth: i > 0 ? 1 : 0, borderTopColor: COACH_BORDER, marginTop: i > 0 ? 4 : 8,
-                    }}
-                  >
-                    <Text style={{ fontSize: 12, fontWeight: "700", color: "#fff" }}>{day.label}</Text>
-                    <Text className="font-mono" style={{ fontSize: 10, color: COACH_MUTED, marginTop: 1 }}>
-                      {ordinalScheduleLabel(i, day.weekday)} · {day.exercises.length} ejercicios
+              <View style={{ ...CARD, borderRadius: 16, padding: 16, marginTop: 10 }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <View style={{ flex: 1 }}>
+                    <Text className="font-black" style={{ fontSize: 14, color: "#fff" }}>{rutina.nombre}</Text>
+                    <Text className="font-mono" style={{ fontSize: 10, color: COACH_MUTED, marginTop: 2 }}>
+                      {DIA_LABEL[selectedDia]} · {diaCfgRutina?.enfoque || "Descanso"}
                     </Text>
                   </View>
-                ))}
+                  <TouchableOpacity onPress={() => setAssignRoutineOpen(true)} hitSlop={8}>
+                    <Text style={{ fontSize: 11, color: COACH_ACCENT, fontWeight: "800" }}>Editar</Text>
+                  </TouchableOpacity>
+                </View>
+                {!diaCfgRutina || diaCfgRutina.ejercicios.length === 0 ? (
+                  <Text style={{ fontSize: 12, color: COACH_MUTED, marginTop: 10 }}>Día de descanso — sin ejercicios.</Text>
+                ) : (
+                  diaCfgRutina.ejercicios.map((ej, i) => (
+                    <View
+                      key={ej.id}
+                      style={{ paddingVertical: 8, borderTopWidth: i > 0 ? 1 : 0, borderTopColor: COACH_BORDER, marginTop: i > 0 ? 4 : 10 }}
+                    >
+                      <Text style={{ fontSize: 12, fontWeight: "700", color: "#fff" }}>{ej.nombre}</Text>
+                      <Text className="font-mono" style={{ fontSize: 10, color: COACH_MUTED, marginTop: 1 }}>
+                        {ej.series.length} series
+                        {ej.series.some(s => s.minWeight > 0 || s.targetReps > 0) && (
+                          <Text style={{ color: COACH_ACCENT }}>
+                            {" · mín. "}{Math.max(...ej.series.map(s => s.minWeight))}kg · obj. {Math.max(...ej.series.map(s => s.targetReps))} reps
+                          </Text>
+                        )}
+                      </Text>
+                    </View>
+                  ))
+                )}
+              </View>
+            )}
+
+            <TouchableOpacity onPress={() => setChangeStageOpen(true)} style={{ marginTop: 12, alignItems: "center" }}>
+              <Text style={{ fontSize: 11, color: COACH_MUTED, textDecorationLine: "underline" }}>
+                Aplicar plantilla / cambiar etapa
+              </Text>
+            </TouchableOpacity>
+            {hasStrictAssignment(student.routineJson) && (
+              <View style={{ marginTop: 10, borderRadius: 12, padding: 10, backgroundColor: "rgba(255,59,48,0.08)", borderWidth: 1, borderColor: "rgba(255,59,48,0.25)" }}>
+                <Text style={{ fontSize: 10, color: COACH_ALERT, textAlign: "center" }}>
+                  Este alumno tiene una rutina estricta asignada directamente — aplicar una plantilla la reemplazará.
+                </Text>
               </View>
             )}
 
@@ -410,12 +532,14 @@ export default function AlumnoDetailScreen() {
         {tab === "nutricion" && (
           <>
             <SectionLabel>Dieta asignada</SectionLabel>
+            <WeekdayBar selected={selectedDia} onSelect={setSelectedDia} filled={diasConComidas} />
+
             {dietUnassigned ? (
               <TouchableOpacity
                 activeOpacity={0.85}
                 onPress={() => setAssignDietOpen(true)}
                 style={{
-                  height: 52, borderRadius: 16, backgroundColor: COACH_ACCENT,
+                  height: 52, borderRadius: 16, backgroundColor: COACH_ACCENT, marginTop: 10,
                   flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
                 }}
               >
@@ -423,26 +547,41 @@ export default function AlumnoDetailScreen() {
                 <Text style={{ ...athletic, fontSize: 13, color: "#000" }}>+ Asignar dieta</Text>
               </TouchableOpacity>
             ) : (
-              <View style={{ ...CARD, borderRadius: 16, padding: 16 }}>
+              <View style={{ ...CARD, borderRadius: 16, padding: 16, marginTop: 10 }}>
                 <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <Text className="font-black" style={{ fontSize: 14, color: "#fff", flex: 1 }}>{diet.name}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text className="font-black" style={{ fontSize: 14, color: "#fff" }}>{dieta.nombre}</Text>
+                    <Text className="font-mono" style={{ fontSize: 10, color: COACH_MUTED, marginTop: 2 }}>{DIA_LABEL[selectedDia]}</Text>
+                  </View>
                   <TouchableOpacity onPress={() => setAssignDietOpen(true)} hitSlop={8}>
                     <Text style={{ fontSize: 11, color: COACH_ACCENT, fontWeight: "800" }}>Editar</Text>
                   </TouchableOpacity>
                 </View>
-                <Text className="font-mono" style={{ fontSize: 10, color: COACH_MUTED, marginTop: 2 }}>
-                  {diet.totalCalories} KCAL OBJETIVO · {diet.meals.length} COMIDAS
-                </Text>
-                <View style={{ flexDirection: "row", gap: 16, marginTop: 10 }}>
-                  <Text style={{ fontSize: 11, color: COACH_ACCENT }}>P {diet.macros.protein}g</Text>
-                  <Text style={{ fontSize: 11, color: "#60a5fa" }}>C {diet.macros.carbs}g</Text>
-                  <Text style={{ fontSize: 11, color: "#fb923c" }}>G {diet.macros.fat}g</Text>
-                </View>
+                {!diaCfgDieta || diaCfgDieta.comidas.length === 0 ? (
+                  <Text style={{ fontSize: 12, color: COACH_MUTED, marginTop: 10 }}>Sin comidas asignadas este día.</Text>
+                ) : (
+                  <>
+                    <Text className="font-mono" style={{ fontSize: 10, color: COACH_MUTED, marginTop: 8 }}>
+                      {diaCfgDieta.kcalObjetivo} KCAL OBJETIVO · {diaCfgDieta.comidas.length} COMIDAS
+                    </Text>
+                    <View style={{ flexDirection: "row", gap: 16, marginTop: 10 }}>
+                      <Text style={{ fontSize: 11, color: COACH_ACCENT }}>P {diaCfgDieta.macros.protein}g</Text>
+                      <Text style={{ fontSize: 11, color: "#60a5fa" }}>C {diaCfgDieta.macros.carbs}g</Text>
+                      <Text style={{ fontSize: 11, color: "#fb923c" }}>G {diaCfgDieta.macros.fat}g</Text>
+                    </View>
+                  </>
+                )}
               </View>
             )}
 
             <SectionLabel>Checklist del día</SectionLabel>
-            {detailLoading ? (
+            {!esHoy ? (
+              <View style={{ ...CARD, borderRadius: 16, padding: 16 }}>
+                <Text style={{ fontSize: 12, color: COACH_MUTED }}>
+                  El checklist de cumplimiento solo aplica al día de hoy ({DIA_LABEL[diaSemanaDeHoy()]}).
+                </Text>
+              </View>
+            ) : detailLoading ? (
               <View style={{ ...CARD, borderRadius: 16, padding: 24, alignItems: "center" }}>
                 <ActivityIndicator color={COACH_ACCENT} />
               </View>
@@ -530,23 +669,40 @@ export default function AlumnoDetailScreen() {
         )}
       </ScrollView>
 
+      {/* Vía secundaria: plantillas de la librería + cambio de etapa. La vía
+          primaria para asignar una rutina directa es AssignRoutineModal
+          abajo — ambas escriben al mismo routineJson (ver el aviso de
+          colisión más arriba). */}
       <ChangeStageModal
-        visible={assignRoutineOpen}
+        visible={changeStageOpen}
         studentIds={[student.id]}
         initialStage={studentStage}
         initialStageNumber={student.stageNumber}
-        onClose={() => setAssignRoutineOpen(false)}
+        onClose={() => setChangeStageOpen(false)}
         onApplied={refresh}
+      />
+
+      <AssignRoutineModal
+        visible={assignRoutineOpen}
+        studentId={student.id}
+        initialRoutine={rutina}
+        onClose={() => setAssignRoutineOpen(false)}
+        onSaved={savedRoutine => {
+          // Optimistic local update — roster's routineJson (raw string)
+          // drives both this screen's `rutina` and the "sin rutina" CTA
+          // elsewhere, so patch it immediately instead of waiting on refresh().
+          patchStudent(student.id, { routineJson: JSON.stringify(savedRoutine) });
+        }}
       />
 
       <AssignDietModal
         visible={assignDietOpen}
         studentId={student.id}
-        initialDiet={diet}
+        initialDieta={dieta}
         onClose={() => setAssignDietOpen(false)}
         onSaved={savedDiet => {
           // Optimistic local update — roster's dietJson (raw string) drives
-          // both this screen's `diet` and the "sin dieta" chip elsewhere, so
+          // both this screen's `dieta` and the "sin dieta" chip elsewhere, so
           // patch it immediately instead of waiting on a full refresh().
           patchStudent(student.id, { dietJson: JSON.stringify(savedDiet) });
           // The checklist reads today's checks against the NEW meal list —

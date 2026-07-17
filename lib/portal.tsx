@@ -1,6 +1,10 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
+import {
+  parseDietaJson, parseRoutineJson, dietaJsonToPortalDiet, routineJsonToPortalRoutine,
+  type NumeroSemana,
+} from "@/types/coach-client";
 
 // ── Types mirroring the web /api/me response shape ─────────────────────────
 
@@ -17,6 +21,11 @@ export interface RoutineExercise {
   rest?:        string;
   imageUrl?:    string;
   videoUrl?:    string;
+  // Additive — only present for exercises assigned via the strict routine
+  // builder (types/coach-client.ts EjercicioAsignado.series). Index i is the
+  // per-set threshold for the i-th set the student logs. Absent entirely for
+  // legacy/Template-authored exercises, which stay unenforced.
+  series?:      { minWeight: number; targetReps: number; tecnica?: string }[];
 }
 
 export interface RoutineDay {
@@ -88,6 +97,11 @@ export interface PortalDetail {
     name:        string;
     daysPerWeek: number;
     days:        RoutineDay[];
+    // Periodización por bloques — a qué semana (1-3) del plan corresponde
+    // `days` arriba, resuelta server-side-adjacent en fetchFullAssignment()
+    // desde RoutineJson.fechaInicio (types/coach-client.ts). Ausente para
+    // alumnos sin rutina asignada por el constructor estricto.
+    semanaActual?: { numero: NumeroSemana; nombre: string };
   };
   diet: {
     name:           string;
@@ -129,6 +143,32 @@ interface PortalState {
 
 const PortalContext = createContext<PortalState | null>(null);
 
+// GET /api/mobile/portal strips diet/routine fields down to an old flat-meal
+// allowlist server-side (normaliseMeals/normaliseRoutineDays in the backend
+// route) — any field outside it, including per-day configuracionPorDia and
+// strict-set minWeight/targetReps, is silently dropped before it ever
+// reaches the app. GET /api/students/[id] has no such stripping (a CLIENT is
+// allowed to fetch their OWN record via this same coach-facing route — see
+// types/coach-client.ts's module doc comment for the full reasoning), so
+// this pulls diet/routine from there instead, bridged into the exact shape
+// the rest of the portal already consumes. Never throws — a failure here
+// just means the caller keeps whatever it already had.
+async function fetchFullAssignment(
+  studentId: string, token: string,
+): Promise<{ diet: PortalDetail["diet"]; routine: PortalDetail["routine"] } | null> {
+  try {
+    const res = await api<{ detail?: { diet?: unknown; routine?: unknown } }>(
+      `/api/students/${studentId}`, { token },
+    );
+    return {
+      diet: dietaJsonToPortalDiet(parseDietaJson(res.detail?.diet)),
+      routine: routineJsonToPortalRoutine(parseRoutineJson(res.detail?.routine)),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function PortalProvider({ children }: { children: React.ReactNode }) {
   const { token } = useAuth();
   const [student,   setStudent]   = useState<Student | null>(null);
@@ -143,7 +183,8 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
         { token },
       );
       setStudent(d.student);
-      setDetail(d.detail);
+      const full = await fetchFullAssignment(d.student.id, token);
+      setDetail(full ? { ...d.detail, diet: full.diet, routine: full.routine } : d.detail);
     } catch {
       // Silently tolerate network failures — screens handle null state
     } finally {
@@ -164,4 +205,34 @@ export function usePortal(): PortalState {
   const ctx = useContext(PortalContext);
   if (!ctx) throw new Error("usePortal must be inside <PortalProvider>");
   return ctx;
+}
+
+// GET /api/mobile/community/notices — same endpoint app/(portal)/salas/index.tsx
+// already uses for the AVISOS tab (correctly coachId-scoped server-side via
+// getRecentCoachNotices), reused here as the source for celebration-modal
+// motivational phrases (see lib/coach.tsx's postMotivationalPhrase doc
+// comment for why this endpoint over GET /api/templates). Bare array
+// response, no wrapper bug on this path (unlike the coach-admin
+// GET /api/coach/notices). Never throws — an empty/failed fetch just means
+// the celebration modal falls back to its built-in default phrases.
+// Shared with lib/coach.tsx's postMotivationalPhrase — GroupMessage rows are
+// a shared feed with regular avisos (salas/index.tsx's AVISOS tab), so only
+// entries explicitly tagged this way become celebration-modal candidates; a
+// schedule-change notice never shows up disguised as a "you crushed it!"
+// phrase.
+export const MOTIVATION_PREFIX = "🔥 MOTIVACIÓN: ";
+
+export async function fetchMotivationalPhrases(token: string): Promise<string[]> {
+  try {
+    const notices = await api<{ id: string; senderName: string; role: string; content: string; createdAt: string }[]>(
+      "/api/mobile/community/notices", { token },
+    );
+    if (!Array.isArray(notices)) return [];
+    return notices
+      .filter(n => n.role === "COACH" && n.content.startsWith(MOTIVATION_PREFIX))
+      .map(n => n.content.slice(MOTIVATION_PREFIX.length).trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
 }

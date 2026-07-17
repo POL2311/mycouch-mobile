@@ -1,10 +1,14 @@
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useState, useEffect, useCallback } from "react";
-import { Mail, KeyRound, DollarSign, LogOut, User, Lock, Check } from "lucide-react-native";
+import { Mail, KeyRound, DollarSign, LogOut, User, Lock, Check, Sparkles, Trash2, Plus } from "lucide-react-native";
 import Svg, { Defs, LinearGradient, Stop, Rect } from "react-native-svg";
 import { useAuth } from "@/lib/session";
-import { fetchCoachRoomProfile, type CoachRoomProfile } from "@/lib/coach";
+import {
+  fetchCoachRoomProfile, fetchCoachNotices, postMotivationalPhrase, deleteCoachNotice, useCoach,
+  type CoachRoomProfile, type CoachNotice,
+} from "@/lib/coach";
+import { MOTIVATION_PREFIX } from "@/lib/portal";
 import { PulseButton } from "@/components/ui/PulseButton";
 import { COACH_BG, COACH_CARD, COACH_BORDER, COACH_ACCENT, COACH_ALERT, COACH_MUTED } from "../_layout";
 
@@ -102,6 +106,58 @@ export default function CoachPerfilScreen() {
       setSavingPw(false);
     }
   }, [canSavePw, savingPw, currentPw, newPw, changePassword]);
+
+  // ── Frases motivacionales ──────────────────────────────────────────────
+  // Persistidas como GroupMessage (mismo mecanismo que el Tablón de Avisos —
+  // ver lib/coach.tsx's postMotivationalPhrase) etiquetadas con
+  // MOTIVATION_PREFIX para no mezclarse con avisos normales en el mismo feed.
+  // El alumno las lee vía GET /api/mobile/community/notices
+  // (lib/portal.tsx's fetchMotivationalPhrases), correctamente filtradas por
+  // coach. La app no tiene ningún endpoint que devuelva el Coach.id del
+  // propio coach — se toma de cualquier fila del roster (todas comparten
+  // coachId); si el coach aún no tiene alumnos vinculados, el composer queda
+  // deshabilitado con una nota explicando por qué.
+  const { students: roster } = useCoach();
+  const ownCoachId = roster[0]?.coachId;
+
+  const [phrases, setPhrases] = useState<CoachNotice[]>([]);
+  const [phrasesLoading, setPhrasesLoading] = useState(true);
+  const [newPhrase, setNewPhrase] = useState("");
+  const [savingPhrase, setSavingPhrase] = useState(false);
+  const [phraseError, setPhraseError] = useState<string | null>(null);
+
+  const loadPhrases = useCallback(() => {
+    if (!token) return;
+    setPhrasesLoading(true);
+    fetchCoachNotices(token)
+      .then(rows => setPhrases(rows.filter(n => n.content.startsWith(MOTIVATION_PREFIX))))
+      .catch(() => setPhrases([]))
+      .finally(() => setPhrasesLoading(false));
+  }, [token]);
+
+  useEffect(() => { loadPhrases(); }, [loadPhrases]);
+
+  const addPhrase = useCallback(async () => {
+    const text = newPhrase.trim();
+    if (!text || !token || !ownCoachId) return;
+    setSavingPhrase(true);
+    setPhraseError(null);
+    try {
+      await postMotivationalPhrase(ownCoachId, text, user?.name || "Coach", token);
+      setNewPhrase("");
+      loadPhrases();
+    } catch (e) {
+      setPhraseError(e instanceof Error ? e.message : "No se pudo guardar la frase.");
+    } finally {
+      setSavingPhrase(false);
+    }
+  }, [newPhrase, token, ownCoachId, user?.name, loadPhrases]);
+
+  const removePhrase = useCallback((id: string) => {
+    if (!token) return;
+    setPhrases(prev => prev.filter(p => p.id !== id));   // optimistic
+    deleteCoachNotice(id, token).catch(loadPhrases);       // rollback via refetch
+  }, [token, loadPhrases]);
 
   // Pure state teardown, no navigation call. app/_layout.tsx gates (portal)/
   // (coach)/index behind <Stack.Protected guard={...}>, so clearing token/
@@ -243,6 +299,66 @@ export default function CoachPerfilScreen() {
                   </>
                 )}
             </TouchableOpacity>
+          </View>
+
+          {/* ── Frases motivacionales ── */}
+          <Text style={{ fontSize: 11, fontWeight: "800", letterSpacing: 1, color: COACH_MUTED, textTransform: "uppercase", marginBottom: 10 }}>
+            Frases motivacionales
+          </Text>
+          <View style={{ ...CARD, borderRadius: 16, padding: 16, marginBottom: 20 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <Sparkles size={16} color={COACH_ACCENT} />
+              <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 1, color: COACH_MUTED, textTransform: "uppercase", flex: 1 }}>
+                Aparecen al azar cuando un alumno completa su nutrición o su entreno del día
+              </Text>
+            </View>
+
+            {!ownCoachId && !phrasesLoading && (
+              <Text style={{ fontSize: 11, color: COACH_MUTED, marginBottom: 10 }}>
+                Necesitas al menos un alumno vinculado antes de poder configurar frases.
+              </Text>
+            )}
+
+            <View style={{ flexDirection: "row", gap: 8, marginBottom: phraseError ? 8 : 12 }}>
+              <TextInput
+                value={newPhrase}
+                onChangeText={setNewPhrase}
+                placeholder="Ej. ¡La disciplina supera la motivación!"
+                placeholderTextColor="#52525b"
+                editable={!!ownCoachId}
+                style={{ ...CARD, flex: 1, borderRadius: 10, padding: 12, color: "#fff", fontSize: 13 }}
+              />
+              <TouchableOpacity
+                activeOpacity={0.8}
+                disabled={!ownCoachId || !newPhrase.trim() || savingPhrase}
+                onPress={addPhrase}
+                style={{
+                  width: 44, borderRadius: 10, alignItems: "center", justifyContent: "center",
+                  backgroundColor: COACH_ACCENT, opacity: !ownCoachId || !newPhrase.trim() || savingPhrase ? 0.4 : 1,
+                }}
+              >
+                {savingPhrase ? <ActivityIndicator color="#000" size="small" /> : <Plus size={18} color="#000" strokeWidth={2.5} />}
+              </TouchableOpacity>
+            </View>
+            {phraseError && <Text style={{ fontSize: 11, color: COACH_ALERT, marginBottom: 10 }}>{phraseError}</Text>}
+
+            {phrasesLoading ? (
+              <ActivityIndicator color={COACH_ACCENT} style={{ marginTop: 6 }} />
+            ) : phrases.length === 0 ? (
+              <Text style={{ fontSize: 11, color: COACH_MUTED }}>Aún no configuras ninguna frase — se usan frases de respaldo.</Text>
+            ) : (
+              phrases.map((p, i) => (
+                <View
+                  key={p.id}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingVertical: 8, borderTopWidth: i > 0 ? 1 : 0, borderTopColor: COACH_BORDER }}
+                >
+                  <Text style={{ flex: 1, fontSize: 12, color: "#d4d4d8" }}>{p.content.slice(MOTIVATION_PREFIX.length)}</Text>
+                  <TouchableOpacity onPress={() => removePhrase(p.id)} hitSlop={8}>
+                    <Trash2 size={14} color="#f87171" />
+                  </TouchableOpacity>
+                </View>
+              ))
+            )}
           </View>
 
           {/* ── Cuenta (read-only, real token identity) ── */}

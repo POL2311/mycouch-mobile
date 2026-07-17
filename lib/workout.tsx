@@ -71,6 +71,10 @@ interface WorkoutState {
   routineName:    string;
   dayLabel:       string;
   dayFocus:       string;
+  // "Semana 2 · Progresión" — empty string when the assigned routine has no
+  // periodización (legacy/Template-authored). See types/coach-client.ts's
+  // SEMANA_LABEL / semanaActualPorFecha.
+  semanaLabel:    string;
   totalEx:        number;
   hasAssignment:  boolean;
   // Portal hydration passthrough — lets consumers distinguish "still fetching
@@ -155,6 +159,8 @@ export function WorkoutProvider({ children }: { children: React.ReactNode }) {
   // Blueprint §1.1: the lobby's H1 is the day's overall muscle focus, not the
   // routine name — "SIN PROGRAMACIÓN" when the coach hasn't assigned today.
   const dayFocus    = todayDay?.focus ?? "SIN PROGRAMACIÓN";
+  const semanaActual = detail?.routine?.semanaActual;
+  const semanaLabel = semanaActual ? `Semana ${semanaActual.numero} · ${semanaActual.nombre}` : "";
   const totalEx     = exercises.length;
   const cacheKey    = `mc:session_demo_${todayDateStr()}`;
 
@@ -362,8 +368,8 @@ export function WorkoutProvider({ children }: { children: React.ReactNode }) {
     setSyncStatus("syncing");
     try {
       const exerciseLogs: ServerExerciseLog[] = exercises.map((ex, i) => {
-        const completedSets = Math.min(doneSets[i] ?? 0, ex.sets);
-        const targetReps    = parseInt(ex.reps, 10) || 0;
+        const completedSets    = Math.min(doneSets[i] ?? 0, ex.sets);
+        const fallbackReps     = parseInt(ex.reps, 10) || 0;
         return {
           exerciseName: ex.name,
           muscleGroup:  ex.muscleGroup ?? null,
@@ -373,6 +379,10 @@ export function WorkoutProvider({ children }: { children: React.ReactNode }) {
             // controller; fall back to the prescribed reps at 0kg only for
             // sets completed before that controller existed / was skipped.
             const log = setLogs[i]?.[s];
+            // Strict-builder exercises (types/coach-client.ts) carry a
+            // per-set target; legacy/Template exercises only have one
+            // uniform reps string for the whole exercise.
+            const targetReps = ex.series?.[s]?.targetReps ?? fallbackReps;
             return {
               setNumber:  s + 1,
               targetReps,
@@ -484,7 +494,7 @@ export function WorkoutProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <WorkoutContext.Provider value={{
-      exercises, routineName, dayLabel, dayFocus, totalEx, hasAssignment, isLoading: portalLoading,
+      exercises, routineName, dayLabel, dayFocus, semanaLabel, totalEx, hasAssignment, isLoading: portalLoading,
       lifecycle, setLifecycle, watchStatus, doneSets, doneEx, setDoneEx, wDuration, biometrics,
       workoutDone, setWorkoutDone, activeExIdx, setActiveExIdx, restOn, restSecs, restTotal,
       startRest, skipRest, extendRest, syncStatus,

@@ -106,6 +106,8 @@ export default function CoachLayout() {
         <Tabs.Screen name="sala" options={{ href: null }} />
         {/* Hidden route — pushed from the Alumnos roster, off the dock */}
         <Tabs.Screen name="alumno" options={{ href: null }} />
+        {/* Hidden route — pushed from Plantillas' "Gestionar catálogo" link */}
+        <Tabs.Screen name="catalogo" options={{ href: null }} />
       </Tabs>
     </CoachProvider>
   );

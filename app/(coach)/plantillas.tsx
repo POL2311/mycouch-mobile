@@ -1,11 +1,11 @@
 import { View, Text, TextInput, TouchableOpacity, Pressable, ScrollView, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { router } from "expo-router";
 import { Plus, Boxes } from "lucide-react-native";
 import { useAuth } from "@/lib/session";
 import { fetchTemplates, type TemplateType, type StoredTemplate, type StoredDietTemplate, type StoredRoutineTemplate } from "@/lib/coach";
 import TemplateEditorModal from "@/components/coach/TemplateEditorModal";
-import ExercisePicker from "@/components/coach/ExercisePicker";
 
 const VOLT   = "#CCFF00";
 const SILVER = "#8e8e93";
@@ -49,7 +49,6 @@ export default function PlantillasScreen() {
   const [loading, setLoading] = useState(true);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<StoredTemplate | undefined>(undefined);
-  const [catalogOpen, setCatalogOpen] = useState(false);
 
   const load = useCallback(() => {
     if (!token) return;
@@ -75,9 +74,9 @@ export default function PlantillasScreen() {
       <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, paddingTop: 12, marginBottom: 14 }}>
         <Text style={{ ...athletic, fontSize: 24, color: "#fff" }}>Plantillas</Text>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
-          <TouchableOpacity activeOpacity={0.7} onPress={() => setCatalogOpen(true)} style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+          <TouchableOpacity activeOpacity={0.7} onPress={() => router.push("/(coach)/catalogo")} style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
             <Boxes size={15} color={SILVER} />
-            <Text className="font-bold" style={{ fontSize: 11, color: SILVER }}>Catálogo</Text>
+            <Text className="font-bold" style={{ fontSize: 11, color: SILVER }}>Gestionar catálogo</Text>
           </TouchableOpacity>
           <TouchableOpacity
             activeOpacity={0.8}
@@ -172,7 +171,6 @@ export default function PlantillasScreen() {
         onClose={() => setEditorOpen(false)}
         onSaved={load}
       />
-      <ExercisePicker visible={catalogOpen} onClose={() => setCatalogOpen(false)} readOnly />
     </SafeAreaView>
   );
 }

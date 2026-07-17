@@ -16,6 +16,7 @@ import Animated, {
 import Svg, { Defs, LinearGradient, Stop, Rect } from "react-native-svg";
 import { usePortal, resolveDietDay } from "@/lib/portal";
 import { useAuth } from "@/lib/session";
+import { useMotivation } from "@/lib/motivation";
 import { api } from "@/lib/api";
 import type { Meal } from "@/lib/portal";
 
@@ -1254,6 +1255,7 @@ function MealDetailSheet({
 export default function NutritionTab() {
   const { token }               = useAuth();
   const { student, detail, isLoading, refresh } = usePortal();
+  const { celebrate } = useMotivation();
 
   // PortalProvider fetches once on mount only — without this, a diet the
   // coach just assigned (dietJson, via PUT /api/students/[id]) wouldn't show
@@ -1471,6 +1473,22 @@ export default function NutritionTab() {
     }
     if (!reached) celebratedRef.current = false;
   }, [caloricPct, totalConsumed, proteinConsumed, completedCount, meals.length]);
+
+  // Disparador de éxito — "checklist de nutrición al 100%": mismo patrón
+  // false→true + re-arme por activeDate que el logro de kcal arriba, pero
+  // dispara el modal compartido (MotivationProvider) en vez de navegar — es
+  // un logro distinto (comidas completas, no necesariamente el objetivo
+  // calórico exacto) y puede coincidir con el de kcal sin pisarse: cada uno
+  // tiene su propio guard.
+  const perfectDayCelebratedRef = useRef(false);
+  useEffect(() => { perfectDayCelebratedRef.current = false; }, [activeDate]);
+  useEffect(() => {
+    if (perfectDay && !perfectDayCelebratedRef.current) {
+      perfectDayCelebratedRef.current = true;
+      celebrate();
+    }
+    if (!perfectDay) perfectDayCelebratedRef.current = false;
+  }, [perfectDay, celebrate]);
 
   // Scroll-reactive directive collapse — scrolling the meal list interpolates
   // the banner's height/opacity to 0 so cards roll up under the calendar strip.

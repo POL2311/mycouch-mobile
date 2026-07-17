@@ -1,6 +1,6 @@
 import {
   View, Text, Pressable, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Modal, StyleSheet,
-  KeyboardAvoidingView, Platform, type ViewStyle,
+  KeyboardAvoidingView, Platform, Alert, type ViewStyle,
 } from "react-native";
 import type { ReactNode } from "react";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -25,6 +25,16 @@ type Lift = "squat" | "deadlift" | "bench";
 const LIFT_LABEL: Record<Lift, string> = {
   squat: "SENTADILLA", deadlift: "PESO MUERTO", bench: "BANCA",
 };
+
+// La serie que corresponde al set que el alumno está a punto de registrar.
+// `ex.series` solo existe para ejercicios asignados vía el constructor
+// estricto (types/coach-client.ts) — ejercicios de plantilla/legado no lo
+// traen y quedan sin exigencia (undefined). Si el alumno hace más sets de
+// los configurados, se recorta a la última serie definida.
+function serieActivaFor(ex: RoutineExercise | undefined, doneSetsForEx: number) {
+  if (!ex?.series || ex.series.length === 0) return undefined;
+  return ex.series[Math.min(doneSetsForEx, ex.series.length - 1)];
+}
 
 // ── Pantalla 2/3 tracker tokens ──────────────────────────────────────────────
 const GOLD      = "#D4AF37";  // Récord Personal rim
@@ -346,6 +356,31 @@ function ActiveWorkoutView({
             />
           </View>
 
+          {/* Umbral + técnica exigidos por el coach para esta serie exacta —
+              solo existen para ejercicios asignados vía el constructor
+              estricto (types/coach-client.ts SerieAsignada). */}
+          {(() => {
+            const serieActiva = serieActivaFor(ex, doneSetsForEx);
+            if (!serieActiva) return null;
+            const hasMin = serieActiva.minWeight > 0;
+            const hasTecnica = !!serieActiva.tecnica;
+            if (!hasMin && !hasTecnica) return null;
+            return (
+              <View style={{ marginTop: 12, paddingHorizontal: GUTTER }}>
+                {hasMin && (
+                  <Text style={{ fontSize: 11, fontWeight: "800", color: VOLT, textAlign: "center" }}>
+                    El peso mínimo con el que debes hacer la serie es {serieActiva.minWeight} kg
+                  </Text>
+                )}
+                {hasTecnica && (
+                  <Text style={{ fontSize: 11, fontWeight: "700", color: TEAL, textAlign: "center", marginTop: hasMin ? 4 : 0 }}>
+                    Técnica: {serieActiva.tecnica}
+                  </Text>
+                )}
+              </View>
+            );
+          })()}
+
           {/* ── 4 · Master floor action CTA — SET COMPLETE ──
                Light haptic + set capture fire inside onSetComplete; the shared
                rest engine flips isResting → <RestTimerView/> mounts. */}
@@ -625,10 +660,13 @@ export default function ExerciseFocusScreen() {
   const ex = exercises[idx];
 
   // Reset to prescribed weight/reps when the focused exercise changes —
-  // keyed on ex.name only; routine data never changes mid-session.
+  // keyed on ex.name only; routine data never changes mid-session. Prefers
+  // the strict builder's series[0] (numeric, exact) over the free-text
+  // weight/reps strings when present.
   useEffect(() => {
-    const w = parseFloat((ex?.weight ?? "").replace(/[^\d.]/g, "")) || 0;
-    const r = parseInt(ex?.reps ?? "", 10) || 10;
+    const primera = ex?.series?.[0];
+    const w = primera ? primera.minWeight : parseFloat((ex?.weight ?? "").replace(/[^\d.]/g, "")) || 0;
+    const r = primera ? primera.targetReps : parseInt(ex?.reps ?? "", 10) || 10;
     setFocusWeight(w);
     setFocusReps(r);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -686,6 +724,24 @@ export default function ExerciseFocusScreen() {
   const handleSetCompleteWithCapture = useCallback(async () => {
     const weight = focusWeight;
     const reps   = focusReps;
+
+    // Bloqueo de ejecución en vivo — regla de negocio del coach (types/
+    // coach-client.ts SerieAsignada.minWeight/targetReps). Solo bloquea
+    // cuando el ejercicio trae `series` (asignado vía el constructor
+    // estricto); ejercicios de plantilla/legado nunca tienen `series` y
+    // quedan sin exigencia. Hard block: no se registra el set hasta corregir.
+    const doneSetsForEx = ex ? Math.min(doneSets[idx] ?? 0, ex.sets) : 0;
+    const serieActiva = serieActivaFor(ex, doneSetsForEx);
+    if (serieActiva && (weight < serieActiva.minWeight || reps < serieActiva.targetReps)) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+      Alert.alert(
+        "Serie insuficiente",
+        `Tu coach exige mínimo ${serieActiva.minWeight} kg y ${serieActiva.targetReps} reps para esta serie. Ajusta los valores para continuar.`,
+        [{ text: "Entendido" }],
+      );
+      return;
+    }
+
     await handleSetComplete({ weight, reps });
     addXP(15);
     if (lift && token && weight > (currentPR ?? 0)) {
@@ -695,7 +751,7 @@ export default function ExerciseFocusScreen() {
         .then(() => refresh())
         .catch(() => setOptimisticPR(null));
     }
-  }, [handleSetComplete, focusWeight, focusReps, lift, currentPR, token, refresh, addXP]);
+  }, [handleSetComplete, focusWeight, focusReps, lift, currentPR, token, refresh, addXP, ex, doneSets, idx]);
 
   // ── Video ────────────────────────────────────────────────────────────────
   const videoSource = ex?.videoUrl ?? null;

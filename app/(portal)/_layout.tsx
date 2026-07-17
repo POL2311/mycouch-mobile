@@ -7,6 +7,8 @@ import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { PortalProvider } from "@/lib/portal";
 import { WorkoutProvider } from "@/lib/workout";
 import { GamificationProvider } from "@/lib/gamification";
+import { MotivationProvider } from "@/lib/motivation";
+import CelebrationModal from "@/components/ui/CelebrationModal";
 
 const VOLT = "#CCFF00";
 
@@ -128,6 +130,7 @@ export default function PortalLayout() {
           set state survive the stack push instead of forking per screen. */}
       <WorkoutProvider>
       <GamificationProvider>
+      <MotivationProvider>
         <Tabs
           tabBar={props => <LuxuryDock {...props} />}
           screenOptions={{ headerShown: false }}
@@ -141,6 +144,11 @@ export default function PortalLayout() {
           <Tabs.Screen name="exercise" options={{ href: null }} />
           <Tabs.Screen name="workout" options={{ href: null }} />
         </Tabs>
+        {/* Mount-once celebration overlay — RN <Modal> renders in its own
+            native layer above the tab dock regardless of tree position, so
+            any screen calling useMotivation().celebrate() lights this up. */}
+        <CelebrationModal />
+      </MotivationProvider>
       </GamificationProvider>
       </WorkoutProvider>
     </PortalProvider>
