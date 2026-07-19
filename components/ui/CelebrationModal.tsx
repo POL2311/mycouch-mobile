@@ -2,7 +2,7 @@ import { View, Text, TouchableOpacity, Modal } from "react-native";
 import { useEffect } from "react";
 import { MotiView } from "moti";
 import { Check } from "lucide-react-native";
-import * as Haptics from "expo-haptics";
+import { triggerSuccess } from "@/lib/haptics";
 import { useMotivation } from "@/lib/motivation";
 
 // ── Modal de celebración premium — pantalla completa, negro absoluto,
@@ -41,7 +41,7 @@ export default function CelebrationModal() {
   const { activePhrase, dismiss } = useMotivation();
 
   useEffect(() => {
-    if (activePhrase) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    if (activePhrase) triggerSuccess();
   }, [activePhrase]);
 
   return (

@@ -1,6 +1,6 @@
 import {
   View, Text, TextInput, TouchableOpacity, Pressable, ScrollView, ActivityIndicator,
-  ImageBackground, Modal, StyleSheet,
+  ImageBackground, Modal, StyleSheet, Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MotiView } from "moti";
@@ -9,13 +9,22 @@ import { PulseButton } from "@/components/ui/PulseButton";
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
+import { useRouter } from "expo-router";
+import * as ImagePicker from "expo-image-picker";
+import { useAudioRecorder, useAudioRecorderState, useAudioPlayer, RecordingPresets, requestRecordingPermissionsAsync } from "expo-audio";
 import {
-  LayoutGrid, Trophy, Zap, Users, Bell, Heart, MessageCircle, Activity, ChevronDown,
+  LayoutGrid, Trophy, Zap, Users, Bell, Heart, MessageCircle, Activity, ChevronDown, ChevronLeft,
+  Send, X as XIcon, MessagesSquare, Share2, Search, Plus, Mic, Images, Award, Play, Pause, Square,
 } from "lucide-react-native";
 import Svg, { Polygon, Defs, LinearGradient, Stop, Rect } from "react-native-svg";
 import { useAuth } from "@/lib/session";
-import { usePortal } from "@/lib/portal";
+import { usePortal, joinCommunityRoom } from "@/lib/portal";
 import { api } from "@/lib/api";
+import { triggerImpact, triggerSuccess, triggerWarning } from "@/lib/haptics";
+import { useGamification } from "@/lib/gamification";
+import { tacticalSubHeader } from "@/lib/typography";
+import { ChatThreadModal, type ChatMessage } from "@/components/social/ChatThreadModal";
+import { XPToast, useXPToast } from "@/components/social/XPToast";
 
 // The lobby gate needs raw HTTP status codes for the blueprint's exact
 // 403→AUTH / !ok→NET taxonomy, which the api() helper flattens into thrown
@@ -43,13 +52,13 @@ interface RoomsSnapshot { rooms: PublicRoom[]; currentRoom: CurrentRoom }
 // ══════════════════════════════════════════════════════════════════════════════
 //  TYPES — mirrored verbatim from MYCOACH_SALAS_WEB_BLUEPRINT.md §3.1
 // ══════════════════════════════════════════════════════════════════════════════
-type RoomTabId = "FEED" | "RANKING" | "RETOS" | "ROSTER" | "AVISOS";
+type RoomTabId = "FEED" | "RANKING" | "RETOS" | "ROSTER" | "AVISOS" | "CHAT" | "DMS";
 
 interface PublicRoom  { id: string; name: string; memberCount: number }
 type CurrentRoom = { id: string; name: string } | null;
 interface ServerNotice { id: string; senderName: string; role: string; content: string; createdAt: string }
 
-interface RosterMember {
+export interface RosterMember {
   id: number;
   name: string;
   avatarInitials: string;
@@ -78,9 +87,21 @@ interface LiveStake {
   status: "PENDIENTE" | "EN COMBATE TÁCTICO";
 }
 
+interface FeedComment { id: number; handle: string; text: string }
+
+interface TelemetryCard { label: string; value: string; sub: string }
+
 interface FeedPost {
   id: number; handle: string; time: string; exercise: string; badge: string;
-  img: string; likes: number; comments: number; comment: string;
+  img: string | null; likes: number; comment: string;
+  commentsList: FeedComment[];
+  // Módulo 1 (FAB de creación) — adjuntos reales opcionales: fotos de galería
+  // nativa (expo-image-picker), nota de audio grabada (expo-audio) y una
+  // tarjeta de telemetría embebida generada desde datos reales del perfil
+  // (PRs / rango) — nunca simulados.
+  extraImages?: string[];
+  audioUri?: string | null;
+  telemetry?: TelemetryCard | null;
 }
 
 const CHALLENGE_MODALITIES = [
@@ -93,6 +114,8 @@ const ROOM_TABS: { id: RoomTabId; label: string; Icon: typeof LayoutGrid }[] = [
   { id: "FEED",    label: "FEED",    Icon: LayoutGrid },
   { id: "RANKING", label: "RANKING", Icon: Trophy     },
   { id: "RETOS",   label: "RETOS",   Icon: Zap        },
+  { id: "CHAT",    label: "CHAT",    Icon: MessageCircle },
+  { id: "DMS",     label: "DMS",     Icon: MessagesSquare },
   { id: "ROSTER",  label: "ROSTER",  Icon: Users      },
   { id: "AVISOS",  label: "AVISOS",  Icon: Bell       },
 ];
@@ -101,7 +124,7 @@ const ROOM_TABS: { id: RoomTabId; label: string; Icon: typeof LayoutGrid }[] = [
 //  SEED DATASETS — verbatim values from blueprint §3.3 (client-simulated
 //  modules; §1.8: no server endpoints exist for feed/ranking/roster/challenges)
 // ══════════════════════════════════════════════════════════════════════════════
-const SALA_ROSTER: RosterMember[] = [
+export const SALA_ROSTER: RosterMember[] = [
   { id: 1, name: "MARCUS_ELITE",  avatarInitials: "ME", avatarBgColor: "linear-gradient(135deg,#CCFF00,#00F0FF)", rankBadgeTitle: "BESTIA ELITE", rnk: 1, rachaActiveDays: 42, isOnline: true,  isMe: false, pts: 4820, kcal: 4210, sets: 52, prs: { maxDeadlift: 220, maxSquat: 185, benchPress: 150, kcalRecord: 6200 } },
   { id: 2, name: "COACH_FELLS",   avatarInitials: "CF", avatarBgColor: "linear-gradient(135deg,#CCFF00,#a3e635)", rankBadgeTitle: "COMANDANTE",   rnk: 2, rachaActiveDays: 38, isOnline: true,  isMe: false, pts: 4650, kcal: 3980, sets: 48, prs: { maxDeadlift: 210, maxSquat: 175, benchPress: 140, kcalRecord: 5900 } },
   { id: 3, name: "ANA_BERSERKER", avatarInitials: "AB", avatarBgColor: "linear-gradient(135deg,#f472b6,#a78bfa)", rankBadgeTitle: "PREDADORA",    rnk: 3, rachaActiveDays: 31, isOnline: false, isMe: false, pts: 4100, kcal: 3650, sets: 44, prs: { maxDeadlift: 165, maxSquat: 140, benchPress: 95,  kcalRecord: 4800 } },
@@ -116,9 +139,29 @@ const SALA_ROSTER: RosterMember[] = [
 const SALA_LEADERBOARD = SALA_ROSTER.slice(0, 6);
 
 const SALA_ACTIVITY_FEED: FeedPost[] = [
-  { id: 101, handle: "MARCUS_ELITE",  time: "Hace 12 min", exercise: "Deadlift PR",     badge: "240KG", img: "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=800&q=60", likes: 24, comments: 8,  comment: "Por fin superando los 240kg. La programación de Fells Team está dando frutos. ¡Vamos equipo!" },
-  { id: 102, handle: "ANA_BERSERKER", time: "Hace 35 min", exercise: "Sentadilla 5×5",  badge: "120KG", img: "https://images.unsplash.com/photo-1571019614242-c5c5dee9f50b?w=800&q=60", likes: 17, comments: 5,  comment: "Semana 8 del programa. PR en sentadilla. La constancia está marcando la diferencia." },
-  { id: 103, handle: "COACH_FELLS",   time: "Hace 1h",     exercise: "Press Banca",     badge: "180KG", img: "https://images.unsplash.com/photo-1581009146145-b5ef050c2e1e?w=800&q=60", likes: 41, comments: 12, comment: "El equipo está en otro nivel este mes. Números récord en 6 de 8 ejercicios clave. Sigan así." },
+  {
+    id: 101, handle: "MARCUS_ELITE", time: "Hace 12 min", exercise: "Deadlift PR", badge: "240KG",
+    img: "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=800&q=60", likes: 24,
+    comment: "Por fin superando los 240kg. La programación de Fells Team está dando frutos. ¡Vamos equipo!",
+    commentsList: [
+      { id: 1, handle: "ANA_BERSERKER", text: "Bestial 🔥" },
+      { id: 2, handle: "COACH_FELLS",   text: "Ese es el nivel que buscamos. Excelente ejecución." },
+    ],
+  },
+  {
+    id: 102, handle: "ANA_BERSERKER", time: "Hace 35 min", exercise: "Sentadilla 5×5", badge: "120KG",
+    img: "https://images.unsplash.com/photo-1571019614242-c5c5dee9f50b?w=800&q=60", likes: 17,
+    comment: "Semana 8 del programa. PR en sentadilla. La constancia está marcando la diferencia.",
+    commentsList: [
+      { id: 1, handle: "MARCUS_ELITE", text: "Vamos ANA 💪" },
+    ],
+  },
+  {
+    id: 103, handle: "COACH_FELLS", time: "Hace 1h", exercise: "Press Banca", badge: "180KG",
+    img: "https://images.unsplash.com/photo-1581009146145-b5ef050c2e1e?w=800&q=60", likes: 41,
+    comment: "El equipo está en otro nivel este mes. Números récord en 6 de 8 ejercicios clave. Sigan así.",
+    commentsList: [],
+  },
 ];
 
 const SALA_METRICS = [
@@ -144,7 +187,7 @@ const SEED_STAKES: LiveStake[] = [
 //  HELPERS
 // ══════════════════════════════════════════════════════════════════════════════
 // Web seeds carry CSS gradient strings; natively we render the leading hex.
-function gradFirst(gradient: string): string {
+export function gradFirst(gradient: string): string {
   return gradient.match(/#[0-9a-fA-F]{6}/)?.[0] ?? "#27272a";
 }
 
@@ -165,7 +208,7 @@ function pct(score: number, max: number): number {
 }
 
 // Metallic tier badge registry — blueprint §3.5 keyword matching, RN colors.
-function rosterBadgeStyle(rankTitle: string): { bg: string; border: string; color: string } {
+export function rosterBadgeStyle(rankTitle: string): { bg: string; border: string; color: string } {
   const r = rankTitle.toUpperCase();
   if (r.includes("BESTIA"))     return { bg: "rgba(26,46,5,0.5)",   border: "#a3e635",               color: "#a3e635" };
   if (r.includes("COMANDANTE")) return { bg: "rgba(66,32,6,0.4)",   border: "rgba(234,179,8,0.4)",   color: "#eab308" };
@@ -191,7 +234,7 @@ function FeedShade() {
 }
 
 // Circular initials avatar (solid derivation of the web gradient seed).
-function AvatarRing({ member, size, ringColor, glowColor }: {
+export function AvatarRing({ member, size, ringColor, glowColor }: {
   member: Pick<RosterMember, "avatarInitials" | "avatarBgColor" | "isOnline">;
   size: number; ringColor?: string; glowColor?: string;
 }) {
@@ -217,9 +260,10 @@ function AvatarRing({ member, size, ringColor, glowColor }: {
 // ══════════════════════════════════════════════════════════════════════════════
 function SalasLobby({
   profileInitials, rooms, loading, fetchErr, isOffline, codeInput, onChangeCode,
-  codeError, codeSuccess, isJoining, joinError, onInject, onJoinRoom,
+  codeError, codeSuccess, isJoining, joinError, onInject, onJoinRoom, onBack,
 }: {
   profileInitials: string;
+  onBack: () => void;
   rooms: PublicRoom[];
   loading: boolean;
   fetchErr: "AUTH" | "NET" | null;
@@ -239,8 +283,21 @@ function SalasLobby({
 
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 150 }}>
-      {/* Branded header — vector diamond-F + volt-ringed profile badge */}
+      {/* Branded header — custom back button (dock is hidden strictly while
+          on Salas — see app/(portal)/_layout.tsx) + vector diamond-F +
+          volt-ringed profile badge */}
       <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 20, marginTop: 12, height: 48 }}>
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={onBack}
+          hitSlop={10}
+          style={{
+            width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", marginRight: 8,
+            backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.1)",
+          }}
+        >
+          <ChevronLeft size={18} color="#fff" />
+        </TouchableOpacity>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
           <View style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
             <Svg width={40} height={40} viewBox="0 0 62 62" style={StyleSheet.absoluteFill}>
@@ -432,8 +489,406 @@ function SalasLobby({
 // ══════════════════════════════════════════════════════════════════════════════
 
 // ── A · FEED ──────────────────────────────────────────────────────────────────
-function FeedTab({ posts, liked, onToggleLike }: {
+// ── FAB de creación (Módulo 1) — reemplaza por completo al PostComposer
+// inline. Tres modos reales, no simulados: grabación de audio (expo-audio),
+// selector nativo de galería (expo-image-picker), y una tercera pestaña que
+// solo puede inyectar datos REALES del atleta (PRs, rango) — nunca valores
+// inventados. ──────────────────────────────────────────────────────────────
+type CreatorMode = "NONE" | "AUDIO" | "IMAGES" | "TELEMETRY";
+
+// Barras de frecuencia animadas — opacidades sobre #1C1C1E (.cursorrules),
+// impulsadas por el nivel real de metering cuando el hardware lo reporta;
+// si el dispositivo no expone metering, caen a un pulso uniforme atado igual
+// a isRecording real (nunca se anima una grabación que no está ocurriendo).
+function AudioWaveform({ isRecording, metering }: { isRecording: boolean; metering?: number }) {
+  const bars = 24;
+  // metering típicamente en dBFS (~-160 silencio, 0 pico) — normalizado a 0..1.
+  const level = metering != null ? Math.min(1, Math.max(0, (metering + 60) / 60)) : 0.5;
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 3, height: 56 }}>
+      {Array.from({ length: bars }).map((_, i) => {
+        const base = 0.15 + ((Math.sin(i * 1.7) + 1) / 2) * 0.5;
+        const h = isRecording ? Math.max(6, base * level * 56) : 6;
+        return (
+          <MotiView
+            key={i}
+            animate={{ height: h, opacity: isRecording ? 0.5 + level * 0.5 : 0.25 }}
+            transition={{ type: "timing", duration: 180 }}
+            style={{ width: 4, borderRadius: 2, backgroundColor: "#1C1C1E", borderWidth: 1, borderColor: isRecording ? VOLT : "rgba(255,255,255,0.1)" }}
+          />
+        );
+      })}
+    </View>
+  );
+}
+
+function AudioNoteCapture({ audioUri, onChangeAudioUri }: { audioUri: string | null; onChangeAudioUri: (uri: string | null) => void }) {
+  const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
+  const recorderState = useAudioRecorderState(recorder, 100);
+  const player = useAudioPlayer(audioUri ?? undefined);
+  const [playing, setPlaying] = useState(false);
+  const [permDenied, setPermDenied] = useState(false);
+
+  // Corrección de bug: startRecording/stopRecording/togglePlayback lanzaban
+  // "Uncaught (in promise)" cuando prepareToRecordAsync()/stop()/seekTo()
+  // rechazaban (permiso revocado a mitad de grabación, grabador ya detenido
+  // por una segunda pulsación rápida, reproductor sin fuente cargada) — nada
+  // capturaba esas promesas. Ahora cada flujo async está en su propio
+  // try/catch defensivo, valida el estado del recorder antes de operar sobre
+  // él, y nunca adjunta una URI nula/indefinida al payload del post.
+  const startRecording = useCallback(async () => {
+    try {
+      const perm = await requestRecordingPermissionsAsync();
+      if (!perm.granted) { setPermDenied(true); triggerWarning(); return; }
+      setPermDenied(false);
+      onChangeAudioUri(null);
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      triggerImpact();
+    } catch (err) {
+      console.warn("[AudioNoteCapture] startRecording failed:", err);
+      triggerWarning();
+    }
+  }, [recorder, onChangeAudioUri]);
+
+  const stopRecording = useCallback(async () => {
+    // Solo detener si el recorder realmente está grabando — una segunda
+    // pulsación tras un stop ya en curso golpeaba recorder.stop() dos veces
+    // y la segunda llamada rechazaba porque ya no había nada que detener.
+    if (!recorderState.isRecording) return;
+    try {
+      await recorder.stop();
+      const uri = recorder.uri;
+      // Nunca adjuntar una URI nula/indefinida al post — sin archivo real,
+      // no hay nota de audio que ofrecer.
+      onChangeAudioUri(uri && uri.length > 0 ? uri : null);
+      if (uri) triggerSuccess(); else triggerWarning();
+    } catch (err) {
+      console.warn("[AudioNoteCapture] stopRecording failed:", err);
+      onChangeAudioUri(null);
+      triggerWarning();
+    }
+  }, [recorder, recorderState.isRecording, onChangeAudioUri]);
+
+  const togglePlayback = useCallback(async () => {
+    if (!audioUri) return;
+    try {
+      if (playing) {
+        player.pause();
+        setPlaying(false);
+      } else {
+        await player.seekTo(0);
+        player.play();
+        setPlaying(true);
+      }
+    } catch (err) {
+      console.warn("[AudioNoteCapture] togglePlayback failed:", err);
+      setPlaying(false);
+    }
+  }, [playing, player, audioUri]);
+
+  const seconds = Math.round(recorderState.durationMillis / 1000);
+
+  return (
+    <View style={{ alignItems: "center", paddingVertical: 8 }}>
+      <AudioWaveform isRecording={recorderState.isRecording} metering={recorderState.metering} />
+      <Text className="font-mono" style={{ fontSize: 11, letterSpacing: 1, color: recorderState.isRecording ? VOLT : SILVER, marginTop: 8 }}>
+        {recorderState.isRecording ? `GRABANDO · ${seconds}s` : audioUri ? "NOTA DE AUDIO LISTA" : "TOCA PARA GRABAR"}
+      </Text>
+      {permDenied && (
+        <Text className="font-mono text-center" style={{ fontSize: 9, color: "#f87171", marginTop: 6 }}>
+          Permiso de micrófono denegado — actívalo en Ajustes.
+        </Text>
+      )}
+
+      {!audioUri ? (
+        <Pressable
+          onPress={recorderState.isRecording ? stopRecording : startRecording}
+          style={{
+            width: 64, height: 64, borderRadius: 32, alignItems: "center", justifyContent: "center", marginTop: 16,
+            backgroundColor: recorderState.isRecording ? "#ef4444" : VOLT,
+            shadowColor: recorderState.isRecording ? "#ef4444" : VOLT, shadowOpacity: 0.5, shadowRadius: 16, shadowOffset: { width: 0, height: 0 }, elevation: 8,
+          }}
+        >
+          {recorderState.isRecording ? <Square size={22} color="#000" fill="#000" /> : <Mic size={26} color="#000" />}
+        </Pressable>
+      ) : (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 14, marginTop: 16 }}>
+          <Pressable
+            onPress={togglePlayback}
+            style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: VOLT, alignItems: "center", justifyContent: "center" }}
+          >
+            {playing ? <Pause size={20} color="#000" /> : <Play size={20} color="#000" />}
+          </Pressable>
+          <Pressable onPress={() => { onChangeAudioUri(null); setPlaying(false); }} hitSlop={8}>
+            <Text className="font-mono" style={{ fontSize: 10, letterSpacing: 1, color: "#f87171" }}>DESCARTAR · REGRABAR</Text>
+          </Pressable>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function ImageGridCapture({ images, onChangeImages }: { images: string[]; onChangeImages: (uris: string[]) => void }) {
+  const pick = useCallback(async () => {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) { triggerWarning(); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"], allowsMultipleSelection: true, quality: 0.7, selectionLimit: 6,
+    });
+    if (result.canceled) return;
+    triggerSuccess();
+    onChangeImages([...images, ...result.assets.map(a => a.uri)].slice(0, 6));
+  }, [images, onChangeImages]);
+
+  return (
+    <View style={{ paddingVertical: 8 }}>
+      <TouchableOpacity
+        activeOpacity={0.8}
+        onPress={pick}
+        style={{
+          height: 96, borderRadius: 14, borderWidth: 1.5, borderStyle: "dashed", borderColor: "rgba(204,255,0,0.4)",
+          alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: "rgba(204,255,0,0.04)",
+        }}
+      >
+        <Images size={22} color={VOLT} />
+        <Text className="font-black" style={{ fontSize: 11, letterSpacing: 0.5, color: VOLT }}>SELECCIONAR DE GALERÍA</Text>
+      </TouchableOpacity>
+      {images.length > 0 && (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+          {images.map((uri, i) => (
+            <View key={uri + i} style={{ width: 72, height: 72, borderRadius: 10, overflow: "hidden" }}>
+              <Image source={{ uri }} style={{ width: "100%", height: "100%" }} />
+              <Pressable
+                onPress={() => onChangeImages(images.filter((_, idx) => idx !== i))}
+                hitSlop={6}
+                style={{ position: "absolute", top: 3, right: 3, width: 18, height: 18, borderRadius: 9, backgroundColor: "rgba(0,0,0,0.7)", alignItems: "center", justifyContent: "center" }}
+              >
+                <XIcon size={11} color="#fff" />
+              </Pressable>
+            </View>
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
+// Carrusel de telemetría — solo datos reales del alumno (PRs / rango activo /
+// racha), nunca inventados. Seleccionar una tarjeta la embebe en el post.
+function TelemetryCapture({ cards, selected, onSelect }: { cards: TelemetryCard[]; selected: TelemetryCard | null; onSelect: (c: TelemetryCard | null) => void }) {
+  return (
+    <View style={{ paddingVertical: 8 }}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingVertical: 4 }}>
+        {cards.map(c => {
+          const sel = selected?.label === c.label;
+          return (
+            <Pressable
+              key={c.label}
+              onPress={() => onSelect(sel ? null : c)}
+              style={{
+                width: 120, borderRadius: 14, padding: 12, backgroundColor: sel ? "rgba(204,255,0,0.08)" : "rgba(255,255,255,0.04)",
+                borderWidth: sel ? 1.5 : 1, borderColor: sel ? VOLT : "rgba(255,255,255,0.1)",
+              }}
+            >
+              <Award size={16} color={sel ? VOLT : SILVER} />
+              <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 0.8, color: SILVER, marginTop: 8 }}>{c.label}</Text>
+              <Text className="font-black" style={{ fontSize: 16, color: "#fff", marginTop: 2 }}>{c.value}</Text>
+              <Text className="font-mono" style={{ fontSize: 7, color: sel ? VOLT : "#71717a", marginTop: 2 }}>{c.sub}</Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
+function PostCreatorModal({ visible, onClose, onSubmit, telemetryCards }: {
+  visible: boolean; onClose: () => void;
+  onSubmit: (text: string, images: string[], audioUri: string | null, telemetry: TelemetryCard | null) => void;
+  telemetryCards: TelemetryCard[];
+}) {
+  const [mode, setMode] = useState<CreatorMode>("NONE");
+  const [text, setText] = useState("");
+  const [images, setImages] = useState<string[]>([]);
+  const [audioUri, setAudioUri] = useState<string | null>(null);
+  const [telemetry, setTelemetry] = useState<TelemetryCard | null>(null);
+
+  const reset = useCallback(() => {
+    setMode("NONE"); setText(""); setImages([]); setAudioUri(null); setTelemetry(null);
+  }, []);
+
+  const close = useCallback(() => { reset(); onClose(); }, [reset, onClose]);
+
+  const canPublish = text.trim().length > 0 || images.length > 0 || !!audioUri || !!telemetry;
+
+  const publish = useCallback(() => {
+    if (!canPublish) return;
+    triggerSuccess();
+    onSubmit(text.trim(), images, audioUri, telemetry);
+    reset();
+    onClose();
+  }, [canPublish, text, images, audioUri, telemetry, onSubmit, reset, onClose]);
+
+  const MODES: { id: CreatorMode; label: string; Icon: typeof Mic }[] = [
+    { id: "AUDIO",      label: "🎙️ Nota de Audio",            Icon: Mic },
+    { id: "IMAGES",     label: "📸 Captura Multimedia",         Icon: Images },
+    { id: "TELEMETRY",  label: "⚡ Inyectar Telemetría/Logros", Icon: Award },
+  ];
+
+  return (
+    <Modal visible={visible} transparent={false} animationType="slide" onRequestClose={close}>
+      <View style={{ flex: 1, backgroundColor: "#000000" }}>
+        <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1 }}>
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+              <Text style={{ ...athletic, fontSize: 18, color: "#fff" }}>NUEVA PUBLICACIÓN</Text>
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={close}
+                style={{
+                  flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6,
+                  backgroundColor: "rgba(204,255,0,0.08)", borderWidth: 1, borderColor: "rgba(204,255,0,0.25)",
+                }}
+              >
+                <XIcon size={12} color={VOLT} />
+                <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 1, color: VOLT }}>CERRAR</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TextInput
+              value={text}
+              onChangeText={setText}
+              placeholder="¿Qué lograste hoy?"
+              placeholderTextColor="#52525b"
+              multiline
+              style={{ ...GLASS, borderRadius: 16, padding: 14, color: "#fff", fontSize: 14, minHeight: 70, textAlignVertical: "top" }}
+            />
+
+            {/* Mode selector — tactical typography, tres opciones exclusivas */}
+            <View style={{ gap: 8, marginTop: 16 }}>
+              {MODES.map(({ id, label, Icon }) => {
+                const active = mode === id;
+                return (
+                  <TouchableOpacity
+                    key={id}
+                    activeOpacity={0.75}
+                    onPress={() => { triggerImpact(); setMode(active ? "NONE" : id); }}
+                    style={{
+                      ...GLASS, borderRadius: 14, padding: 14, flexDirection: "row", alignItems: "center", gap: 12,
+                      borderColor: active ? VOLT : "rgba(255,255,255,0.06)", borderWidth: active ? 1.5 : 1,
+                      backgroundColor: active ? "rgba(204,255,0,0.06)" : "rgba(28,28,30,0.4)",
+                    }}
+                  >
+                    <Icon size={18} color={active ? VOLT : "#fff"} />
+                    <Text style={tacticalSubHeader}>{label}</Text>
+                    <View style={{ marginLeft: "auto" }}>
+                      {id === "AUDIO"     && audioUri && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: VOLT }} />}
+                      {id === "IMAGES"    && images.length > 0 && <Text className="font-black" style={{ fontSize: 10, color: VOLT }}>{images.length}</Text>}
+                      {id === "TELEMETRY" && telemetry && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: VOLT }} />}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {mode === "AUDIO"     && <AudioNoteCapture audioUri={audioUri} onChangeAudioUri={setAudioUri} />}
+            {mode === "IMAGES"    && <ImageGridCapture images={images} onChangeImages={setImages} />}
+            {mode === "TELEMETRY" && <TelemetryCapture cards={telemetryCards} selected={telemetry} onSelect={setTelemetry} />}
+          </ScrollView>
+
+          <View style={{ paddingHorizontal: 20, paddingBottom: 8 }}>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              disabled={!canPublish}
+              onPress={publish}
+              style={{
+                backgroundColor: canPublish ? VOLT : "rgba(255,255,255,0.08)", borderRadius: 999, paddingVertical: 16, alignItems: "center",
+                shadowColor: VOLT, shadowOpacity: canPublish ? 0.35 : 0, shadowRadius: 18, shadowOffset: { width: 0, height: 0 },
+              }}
+            >
+              <Text style={{ ...athletic, fontSize: 13, color: canPublish ? "#000" : SILVER }}>PUBLICAR</Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </View>
+    </Modal>
+  );
+}
+
+// ── Comentarios expandibles — lista real + input para añadir uno nuevo ──────
+function PostCommentsSection({ post, onAddComment }: {
+  post: FeedPost; onAddComment: (postId: number, text: string) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const send = useCallback(() => {
+    if (!draft.trim()) return;
+    onAddComment(post.id, draft.trim());
+    setDraft("");
+  }, [draft, post.id, onAddComment]);
+
+  return (
+    <View style={{ marginTop: 10, borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.06)", paddingTop: 10, gap: 8 }}>
+      {post.commentsList.length === 0 ? (
+        <Text style={{ fontSize: 11, color: SILVER }}>Sé el primero en comentar.</Text>
+      ) : (
+        post.commentsList.map(c => (
+          <View key={c.id} style={{ flexDirection: "row", gap: 6 }}>
+            <Text className="font-black" style={{ fontSize: 11, color: VOLT }}>@{c.handle}</Text>
+            <Text style={{ fontSize: 11, color: "#d4d4d8", flex: 1 }}>{c.text}</Text>
+          </View>
+        ))
+      )}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 }}>
+        <TextInput
+          value={draft}
+          onChangeText={setDraft}
+          placeholder="Escribe un comentario..."
+          placeholderTextColor="#52525b"
+          style={{ flex: 1, backgroundColor: "rgba(255,255,255,0.04)", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, color: "#fff", fontSize: 11 }}
+        />
+        <Pressable onPress={send} disabled={!draft.trim()} hitSlop={8}>
+          <Send size={16} color={draft.trim() ? VOLT : SILVER} />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function FeedPostAudioChip({ uri }: { uri: string }) {
+  const player = useAudioPlayer(uri);
+  const [playing, setPlaying] = useState(false);
+  const toggle = useCallback(async () => {
+    try {
+      if (playing) { player.pause(); setPlaying(false); }
+      else { await player.seekTo(0); player.play(); setPlaying(true); }
+    } catch (err) {
+      console.warn("[FeedPostAudioChip] playback failed:", err);
+      setPlaying(false);
+    }
+  }, [playing, player]);
+  return (
+    <Pressable
+      onPress={toggle}
+      style={{
+        flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "flex-start",
+        backgroundColor: "rgba(204,255,0,0.08)", borderWidth: 1, borderColor: "rgba(204,255,0,0.3)",
+        borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7, marginTop: 10,
+      }}
+    >
+      {playing ? <Pause size={13} color={VOLT} /> : <Play size={13} color={VOLT} />}
+      <Text className="font-mono" style={{ fontSize: 10, letterSpacing: 0.5, color: VOLT }}>NOTA DE AUDIO</Text>
+    </Pressable>
+  );
+}
+
+function FeedTab({
+  posts, liked, onToggleLike, expandedComments, onToggleComments, onAddComment, onSharePost,
+}: {
   posts: FeedPost[]; liked: Set<number>; onToggleLike: (id: number) => void;
+  expandedComments: Set<number>; onToggleComments: (id: number) => void;
+  onAddComment: (postId: number, text: string) => void;
+  onSharePost: (post: FeedPost) => void;
 }) {
   return (
     <View>
@@ -475,6 +930,7 @@ function FeedTab({ posts, liked, onToggleLike }: {
       {/* Post stream — glassmorphic items with masked photography */}
       {posts.map(post => {
         const isLiked = liked.has(post.id);
+        const commentsOpen = expandedComments.has(post.id);
         return (
           <View
             key={post.id}
@@ -483,43 +939,161 @@ function FeedTab({ posts, liked, onToggleLike }: {
               borderRadius: 16, marginHorizontal: 20, marginBottom: 14, overflow: "hidden",
             }}
           >
-            <ImageBackground source={{ uri: post.img }} resizeMode="cover" style={{ height: 150, justifyContent: "flex-end" }}>
-              <FeedShade />
-              <View
-                style={{
-                  position: "absolute", top: 10, right: 10, backgroundColor: "rgba(0,0,0,0.55)",
-                  borderWidth: 1, borderColor: "rgba(204,255,0,0.4)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
-                }}
-              >
-                <Text className="font-black" style={{ fontSize: 9, letterSpacing: 1, color: VOLT }}>{post.badge}</Text>
-              </View>
-              <View style={{ padding: 12 }}>
-                <Text className="font-black uppercase" style={{ fontSize: 15, color: "#fff", letterSpacing: -0.3 }}>
-                  {post.exercise}
-                </Text>
-              </View>
-            </ImageBackground>
+            {post.img && (
+              <ImageBackground source={{ uri: post.img }} resizeMode="cover" style={{ height: 150, justifyContent: "flex-end" }}>
+                <FeedShade />
+                <View
+                  style={{
+                    position: "absolute", top: 10, right: 10, backgroundColor: "rgba(0,0,0,0.55)",
+                    borderWidth: 1, borderColor: "rgba(204,255,0,0.4)", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3,
+                  }}
+                >
+                  <Text className="font-black" style={{ fontSize: 9, letterSpacing: 1, color: VOLT }}>{post.badge}</Text>
+                </View>
+                <View style={{ padding: 12 }}>
+                  <Text className="font-black uppercase" style={{ fontSize: 15, color: "#fff", letterSpacing: -0.3 }}>
+                    {post.exercise}
+                  </Text>
+                </View>
+              </ImageBackground>
+            )}
             <View style={{ padding: 14 }}>
               <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
                 <Text className="font-black" style={{ fontSize: 11, color: VOLT, letterSpacing: 0.5 }}>@{post.handle}</Text>
                 <Text style={{ fontSize: 9, color: SILVER }}>{post.time}</Text>
               </View>
               <Text style={{ fontSize: 12, lineHeight: 17, color: "#d4d4d8" }}>{post.comment}</Text>
+
+              {post.extraImages && post.extraImages.length > 0 && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, marginTop: 10 }}>
+                  {post.extraImages.map((uri, i) => (
+                    <Image key={uri + i} source={{ uri }} style={{ width: 64, height: 64, borderRadius: 8 }} />
+                  ))}
+                </ScrollView>
+              )}
+
+              {post.audioUri && <FeedPostAudioChip uri={post.audioUri} />}
+
+              {post.telemetry && (
+                <View
+                  style={{
+                    flexDirection: "row", alignItems: "center", gap: 10, marginTop: 10, padding: 12, borderRadius: 12,
+                    backgroundColor: "rgba(204,255,0,0.06)", borderWidth: 1, borderColor: "rgba(204,255,0,0.3)",
+                  }}
+                >
+                  <Award size={18} color={VOLT} />
+                  <View>
+                    <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 1, color: SILVER }}>{post.telemetry.label}</Text>
+                    <Text className="font-black" style={{ fontSize: 15, color: "#fff" }}>{post.telemetry.value} <Text style={{ fontSize: 9, color: VOLT }}>{post.telemetry.sub}</Text></Text>
+                  </View>
+                </View>
+              )}
+
               <View style={{ flexDirection: "row", gap: 18, marginTop: 12 }}>
                 <Pressable onPress={() => onToggleLike(post.id)} style={{ flexDirection: "row", alignItems: "center", gap: 5 }} hitSlop={8}>
                   <Heart size={14} color={isLiked ? VOLT : SILVER} fill={isLiked ? VOLT : "transparent"} />
                   <Text className="font-bold" style={{ fontSize: 11, color: isLiked ? VOLT : SILVER }}>{post.likes}</Text>
                 </Pressable>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                  <MessageCircle size={14} color={SILVER} />
-                  <Text className="font-bold" style={{ fontSize: 11, color: SILVER }}>{post.comments}</Text>
-                </View>
+                <Pressable onPress={() => onToggleComments(post.id)} style={{ flexDirection: "row", alignItems: "center", gap: 5 }} hitSlop={8}>
+                  <MessageCircle size={14} color={commentsOpen ? VOLT : SILVER} />
+                  <Text className="font-bold" style={{ fontSize: 11, color: commentsOpen ? VOLT : SILVER }}>{post.commentsList.length}</Text>
+                </Pressable>
+                <Pressable onPress={() => onSharePost(post)} style={{ flexDirection: "row", alignItems: "center", gap: 5, marginLeft: "auto" }} hitSlop={8}>
+                  <Share2 size={14} color={SILVER} />
+                </Pressable>
               </View>
+              {commentsOpen && <PostCommentsSection post={post} onAddComment={onAddComment} />}
             </View>
           </View>
         );
       })}
     </View>
+  );
+}
+
+// ── Z2 · DMS — bandeja de mensajes directos entre "amigos" del ecosistema.
+// Contactos = SALA_ROSTER (los mismos perfiles ya seedeados para RANKING/
+// ROSTER), con buscador por nombre. Abrir un contacto lanza ChatThreadModal
+// (virtualizado — ese sí puede crecer largo con el tiempo). ─────────────────
+function DMsTab({ threads, search, onSearch, onOpenContact }: {
+  threads: Record<number, ChatMessage[]>; search: string; onSearch: (q: string) => void;
+  onOpenContact: (contactId: number) => void;
+}) {
+  const contacts = SALA_ROSTER.filter(m => !m.isMe && m.name.toLowerCase().includes(search.trim().toLowerCase()));
+
+  return (
+    <View style={{ paddingHorizontal: 20, marginTop: 16 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "rgba(255,255,255,0.04)", borderRadius: 12, paddingHorizontal: 12, height: 42, marginBottom: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}>
+        <Search size={14} color={SILVER} />
+        <TextInput
+          value={search}
+          onChangeText={onSearch}
+          placeholder="Buscar amigos..."
+          placeholderTextColor="#52525b"
+          style={{ flex: 1, color: "#fff", fontSize: 13 }}
+        />
+      </View>
+      {contacts.length === 0 ? (
+        <Text style={{ fontSize: 12, color: SILVER, textAlign: "center", marginTop: 20 }}>Sin resultados.</Text>
+      ) : (
+        contacts.map(c => {
+          const thread = threads[c.id] ?? [];
+          const last = thread[thread.length - 1];
+          const unread = thread.length > 0 && !last?.mine;
+          return (
+            <Pressable
+              key={c.id}
+              onPress={() => onOpenContact(c.id)}
+              style={{ ...GLASS, borderRadius: 12, padding: 12, marginBottom: 8, flexDirection: "row", alignItems: "center", gap: 10 }}
+            >
+              <AvatarRing member={c} size={40} />
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Text className="font-bold" style={{ fontSize: 13, color: "#fff" }} numberOfLines={1}>{c.name}</Text>
+                  {c.isOnline && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#4ade80" }} />}
+                </View>
+                <Text className="font-mono" style={{ fontSize: 10, color: SILVER, marginTop: 2 }} numberOfLines={1}>
+                  {last ? last.text : "Toca para iniciar la conversación"}
+                </Text>
+              </View>
+              {unread && (
+                <View style={{ width: 9, height: 9, borderRadius: 4.5, backgroundColor: VOLT, shadowColor: VOLT, shadowOpacity: 0.7, shadowRadius: 6, shadowOffset: { width: 0, height: 0 } }} />
+              )}
+            </Pressable>
+          );
+        })
+      )}
+    </View>
+  );
+}
+
+// ── Z3 · Compartir — BottomSheet interno con amigos recientes + grupos. ─────
+function ShareBottomSheet({ visible, onClose, onSelect }: {
+  visible: boolean; onClose: () => void; onSelect: (contactId: number) => void;
+}) {
+  const contacts = SALA_ROSTER.filter(m => !m.isMe);
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={{ flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(0,0,0,0.75)" }}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View style={{ backgroundColor: "#0F0F10", borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 40, maxHeight: "60%" }}>
+          <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.15)", alignSelf: "center", marginBottom: 16 }} />
+          <Text className="font-black uppercase" style={{ fontSize: 14, color: "#fff", marginBottom: 14 }}>Compartir con</Text>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {contacts.map(c => (
+              <Pressable
+                key={c.id}
+                onPress={() => onSelect(c.id)}
+                style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 10 }}
+              >
+                <AvatarRing member={c} size={40} />
+                <Text className="font-bold" style={{ fontSize: 13, color: "#fff" }}>{c.name}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -1168,19 +1742,33 @@ function AvisosTab({ notices }: { notices: ServerNotice[] }) {
 // ══════════════════════════════════════════════════════════════════════════════
 //  SYNDICATE DASHBOARD SHELL — banner + horizontal sub-tab strip
 // ══════════════════════════════════════════════════════════════════════════════
-function SyndicateDashboard({ roomName, activeTab, onTab, onLeave, isLeaving, children }: {
+function SyndicateDashboard({ roomName, activeTab, onTab, onLeave, isLeaving, onBack, children }: {
   roomName: string;
   activeTab: RoomTabId;
   onTab: (t: RoomTabId) => void;
   onLeave: () => void;
   isLeaving: boolean;
+  onBack: () => void;
   children: ReactNode;
 }) {
   return (
     <View style={{ flex: 1 }}>
-      {/* Room banner */}
+      {/* Room banner — custom back button replaces the hidden LuxuryDock as
+          the only exit from Salas (app/(portal)/_layout.tsx hides the dock
+          strictly for this whole tab, index + chat). */}
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, paddingTop: 12, paddingBottom: 10 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={onBack}
+            hitSlop={10}
+            style={{
+              width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center",
+              backgroundColor: "rgba(255,255,255,0.06)", borderWidth: 1, borderColor: "rgba(255,255,255,0.1)",
+            }}
+          >
+            <ChevronLeft size={16} color="#fff" />
+          </TouchableOpacity>
           <View style={{ width: 34, height: 34, alignItems: "center", justifyContent: "center" }}>
             <Svg width={34} height={34} viewBox="0 0 62 62" style={StyleSheet.absoluteFill}>
               <Polygon points="31,3 59,31 31,59 3,31" stroke={VOLT} strokeWidth={3} fill="none" />
@@ -1245,6 +1833,8 @@ function SyndicateDashboard({ roomName, activeTab, onTab, onLeave, isLeaving, ch
 export default function SalasScreen() {
   const { token } = useAuth();
   const { student } = usePortal();
+  const router = useRouter();
+  const goBack = useCallback(() => { triggerImpact(); router.replace("/"); }, [router]);
 
   // ── Rigid top-level state machine ─────────────────────────────────────────
   const [currentView, setCurrentView] = useState<"LOBBY" | "ROOM_ACTIVE">("LOBBY");
@@ -1270,11 +1860,46 @@ export default function SalasScreen() {
   const [serverNotices, setServerNotices] = useState<ServerNotice[]>([]);
   const [likedActivity, setLikedActivity] = useState<Set<number>>(new Set());
   const [activityFeed,  setActivityFeed]  = useState<FeedPost[]>(SALA_ACTIVITY_FEED);
+  const [expandedComments, setExpandedComments] = useState<Set<number>>(new Set());
   const [selectedAthlete,   setSelectedAthlete]   = useState("");
   const [challengeModality, setChallengeModality] = useState("");
   const [stakeAmount,       setStakeAmount]       = useState(50);
   const [liveStakes,        setLiveStakes]        = useState<LiveStake[]>(SEED_STAKES);
   const [walletBalance,     setWalletBalance]     = useState(0);
+
+  // ── Módulo 5: chat grupal, DMs y compartición — sin backend de mensajería
+  // real (schema de mycouch solo tiene GroupMessage, coach-only-write, sin
+  // modelo de Conversation/DirectMessage), así que todo esto es client-
+  // simulated y persistido localmente (AsyncStorage), igual que el resto de
+  // este módulo (blueprint §1.8). El XP que otorga SÍ es real
+  // (useGamification().addXP), solo el "envío" del mensaje es local. ────────
+  const { addXP, totalXP, currentRank } = useGamification();
+  const { xpToastAmount, showXPToast } = useXPToast();
+  const [dmThreads, setDmThreads] = useState<Record<number, ChatMessage[]>>({});
+  const [activeDmContactId, setActiveDmContactId] = useState<number | null>(null);
+  const [dmSearch, setDmSearch] = useState("");
+  const [shareSheetPost, setShareSheetPost] = useState<FeedPost | null>(null);
+  const [showCreator, setShowCreator] = useState(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem("mc:room_dm_threads").then(raw => { if (raw) setDmThreads(JSON.parse(raw)); }).catch(() => {});
+  }, []);
+
+  const rewardMessageXP = useCallback(() => {
+    addXP(5);
+    showXPToast(5);
+  }, [addXP, showXPToast]);
+
+  const sendDirectMessage = useCallback((contactId: number, text: string) => {
+    const msg: ChatMessage = { id: `${Date.now()}`, senderName: student?.name?.split(" ")[0] || "Tú", text, mine: true, createdAt: new Date().toISOString() };
+    setDmThreads(prev => {
+      const next = { ...prev, [contactId]: [...(prev[contactId] ?? []), msg] };
+      AsyncStorage.setItem("mc:room_dm_threads", JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+    triggerImpact();
+    rewardMessageXP();
+  }, [student?.name, rewardMessageXP]);
 
   // ── Toast rail ────────────────────────────────────────────────────────────
   const [toast, setToast] = useState<string | null>(null);
@@ -1285,6 +1910,28 @@ export default function SalasScreen() {
     toastTimer.current = setTimeout(() => setToast(null), ms);
   }, []);
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+
+  // Compartición — inyecta una tarjeta enriquecida del post (deep-link local
+  // por post.id) directamente en el hilo del DM elegido. Mismo mecanismo de
+  // envío que un mensaje de texto normal (misma recompensa de XP, coherente
+  // con "cada mensaje enviado con éxito" del engagement engine).
+  const shareToContact = useCallback((contactId: number) => {
+    if (!shareSheetPost) return;
+    const post = shareSheetPost;
+    const msg: ChatMessage = {
+      id: `${Date.now()}`, senderName: student?.name?.split(" ")[0] || "Tú", mine: true, createdAt: new Date().toISOString(),
+      text: "Mira esto 👀",
+      sharedPost: { authorHandle: post.handle, exercise: post.exercise, badge: post.badge, img: post.img },
+    };
+    setDmThreads(prev => {
+      const next = { ...prev, [contactId]: [...(prev[contactId] ?? []), msg] };
+      AsyncStorage.setItem("mc:room_dm_threads", JSON.stringify(next)).catch(() => {});
+      return next;
+    });
+    setShareSheetPost(null);
+    triggerSuccess();
+    showToast("Publicación compartida");
+  }, [shareSheetPost, student?.name, showToast]);
 
   // Last resort when a live fetch fails outright: hydrate from whatever
   // snapshot was cached on the last successful load, rather than a blank or
@@ -1353,20 +2000,7 @@ export default function SalasScreen() {
     setJoinError(null);
     setCodeError(false);
     setCodeSuccess(false);
-    let result: { ok: boolean; error?: string; coachName?: string; notices?: ServerNotice[] };
-    try {
-      const res = await fetch(`${BASE_URL}/api/community/join`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(payload),
-      });
-      const data = (await res.json()) as { error?: string; coachName?: string; coachId?: string; notices?: ServerNotice[] };
-      result = res.ok
-        ? { ok: true, coachName: data.coachName, notices: data.notices ?? [] }
-        : { ok: false, error: data?.error ?? "ERROR_DESCONOCIDO" };
-    } catch {
-      result = { ok: false, error: "SIN_CONEXIÓN" };
-    }
+    const result = await joinCommunityRoom(payload, token);
     setIsJoining(false);
 
     if (result.ok) {
@@ -1420,6 +2054,50 @@ export default function SalasScreen() {
     });
     setActivityFeed(feed => feed.map(p => p.id === id ? { ...p, likes: p.likes + (liked ? -1 : 1) } : p));
   }, [likedActivity]);
+
+  // ── FEED composer/comentarios — client-simulated, mismo alcance que el
+  // resto del módulo Salas (blueprint §1.8: sin endpoints reales de feed/
+  // roster/challenges en el backend). Prepend, no append: un post nuevo debe
+  // verse de inmediato arriba del stream, no perdido al fondo. ────────────
+  const myHandle = (student?.name ?? "ATLETA").split(" ")[0]!.toUpperCase();
+
+  const createPost = useCallback((text: string, images: string[], audioUri: string | null, telemetry: TelemetryCard | null) => {
+    const newPost: FeedPost = {
+      id: Date.now(), handle: myHandle, time: "Ahora", exercise: telemetry ? telemetry.label : "Publicación",
+      badge: telemetry ? telemetry.value : "NUEVO",
+      img: images[0] ?? null, extraImages: images.length > 1 ? images.slice(1) : undefined,
+      audioUri, telemetry,
+      likes: 0, comment: text, commentsList: [],
+    };
+    setActivityFeed(feed => [newPost, ...feed]);
+    triggerSuccess();
+  }, [myHandle]);
+
+  // Carrusel de telemetría del FAB — 100% datos reales del alumno (PRs +
+  // rango activo), nunca simulados.
+  const telemetryCards: TelemetryCard[] = [
+    { label: "PR DEADLIFT", value: `${student?.prDeadlift ?? 0}`, sub: "KG" },
+    { label: "PR SQUAT",    value: `${student?.prSquat ?? 0}`,    sub: "KG" },
+    { label: "PR BENCH",    value: `${student?.prBench ?? 0}`,    sub: "KG" },
+    { label: "RANGO ACTUAL", value: currentRank, sub: `${totalXP} XP` },
+    { label: "RACHA ACTIVA", value: `${student?.streak ?? 0}`, sub: "DÍAS" },
+  ];
+
+  const toggleComments = useCallback((postId: number) => {
+    triggerImpact();
+    setExpandedComments(prev => {
+      const next = new Set(prev);
+      if (next.has(postId)) next.delete(postId); else next.add(postId);
+      return next;
+    });
+  }, []);
+
+  const addComment = useCallback((postId: number, text: string) => {
+    triggerImpact();
+    setActivityFeed(feed => feed.map(p => p.id === postId
+      ? { ...p, commentsList: [...p.commentsList, { id: Date.now(), handle: myHandle, text }] }
+      : p));
+  }, [myHandle]);
 
   // ── RETOS: real wallet debit + local stake prepend + acceptance simulator ─
   const launchDebit = useCallback(async (amount: number): Promise<boolean> => {
@@ -1480,6 +2158,15 @@ export default function SalasScreen() {
     setActiveTab("RETOS");
   }, []);
 
+  // CHAT dejó de ser un tab embebido (Módulo 2) — ahora es una pantalla
+  // propia (app/(portal)/salas/chat.tsx), nested bajo "salas" para poder
+  // ocultar el dock igual que exercise/[id]. Tocar el tab CHAT navega en vez
+  // de intercambiar contenido inline.
+  const handleTabPress = useCallback((t: RoomTabId) => {
+    if (t === "CHAT") { triggerImpact(); router.push("/salas/chat"); return; }
+    setActiveTab(t);
+  }, [router]);
+
   const profileInitials = student?.name ? initialsOf(student.name) : "23";
   const roomName = (currentRoom?.name ?? "FELLS TEAM PRO").toUpperCase();
 
@@ -1488,6 +2175,7 @@ export default function SalasScreen() {
       {currentView === "LOBBY" ? (
         <SalasLobby
           profileInitials={profileInitials}
+          onBack={goBack}
           rooms={publicRooms}
           loading={roomsLoading}
           fetchErr={roomsFetchErr}
@@ -1505,12 +2193,22 @@ export default function SalasScreen() {
         <SyndicateDashboard
           roomName={roomName}
           activeTab={activeTab}
-          onTab={setActiveTab}
+          onTab={handleTabPress}
           onLeave={handleLeave}
           isLeaving={isLeaving}
+          onBack={goBack}
         >
-          {activeTab === "FEED"    && <FeedTab posts={activityFeed} liked={likedActivity} onToggleLike={toggleLike} />}
+          {activeTab === "FEED"    && (
+            <FeedTab
+              posts={activityFeed} liked={likedActivity} onToggleLike={toggleLike}
+              expandedComments={expandedComments} onToggleComments={toggleComments} onAddComment={addComment}
+              onSharePost={setShareSheetPost}
+            />
+          )}
           {activeTab === "RANKING" && <RankingTab />}
+          {activeTab === "DMS"     && (
+            <DMsTab threads={dmThreads} search={dmSearch} onSearch={setDmSearch} onOpenContact={id => { triggerImpact(); setActiveDmContactId(id); }} />
+          )}
           {activeTab === "RETOS"   && (
             // Pre-release lock: RETOS debits real wallet balance via a live
             // PATCH /api/me/wallet call, so this isn't ready to ship yet.
@@ -1578,6 +2276,50 @@ export default function SalasScreen() {
           </Text>
         </MotiView>
       )}
+
+      {/* Micro-toast de XP — Módulo 5 "Sistema de Gamificación por Mensaje" */}
+      <XPToast amount={xpToastAmount} topOffset={64} />
+
+      {/* FAB de creación (Módulo 1) — círculo neón fijo, sobrevive al scroll
+          porque vive fuera del ScrollView del RoomShell, como hermano
+          absoluto dentro del SafeAreaView. Solo visible en el FEED de una
+          sala activa — es ahí donde tiene sentido publicar. */}
+      {currentView === "ROOM_ACTIVE" && activeTab === "FEED" && (
+        <Pressable
+          onPress={() => { triggerImpact(); setShowCreator(true); }}
+          style={{
+            position: "absolute", bottom: 30, right: 20, zIndex: 999,
+            width: 60, height: 60, borderRadius: 30, backgroundColor: VOLT,
+            alignItems: "center", justifyContent: "center",
+            shadowColor: VOLT, shadowOpacity: 0.6, shadowRadius: 18, shadowOffset: { width: 0, height: 0 }, elevation: 12,
+          }}
+        >
+          <Plus size={28} color="#000" strokeWidth={2.5} />
+        </Pressable>
+      )}
+
+      <PostCreatorModal
+        visible={showCreator}
+        onClose={() => setShowCreator(false)}
+        onSubmit={createPost}
+        telemetryCards={telemetryCards}
+      />
+
+      <ChatThreadModal
+        visible={activeDmContactId !== null}
+        onClose={() => setActiveDmContactId(null)}
+        title={SALA_ROSTER.find(m => m.id === activeDmContactId)?.name ?? "Chat"}
+        subtitle="Mensaje directo · solo en este dispositivo"
+        messages={activeDmContactId !== null ? dmThreads[activeDmContactId] ?? [] : []}
+        onSend={text => { if (activeDmContactId !== null) sendDirectMessage(activeDmContactId, text); }}
+        avatarColor={gradFirst(SALA_ROSTER.find(m => m.id === activeDmContactId)?.avatarBgColor ?? VOLT)}
+      />
+
+      <ShareBottomSheet
+        visible={!!shareSheetPost}
+        onClose={() => setShareSheetPost(null)}
+        onSelect={shareToContact}
+      />
     </SafeAreaView>
   );
 }

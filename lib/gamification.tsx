@@ -10,11 +10,25 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 // truth for anything a coach needs to see or trust.
 const XP_CACHE_KEY = "mc:gamification_xp";
 
-export const RANK_TIERS: { minXP: number; name: string }[] = [
-  { minXP: 0,    name: "RECLUTA" },
-  { minXP: 500,  name: "ATLETA TÁCTICO" },
-  { minXP: 1500, name: "OPERATIVO" },
-  { minXP: 3000, name: "ELITE V1" },
+// ── Rango único, basado en XP (unificación .cursorrules Parte 3) ────────────
+// Antes había DOS sistemas de rango en paralelo: este (XP real, persistido,
+// 4 tiers genéricos RECLUTA/ATLETA TÁCTICO/...) y otro completamente aparte
+// en app/(portal)/perfil/index.tsx derivado de Student.streak con sus
+// propios 6 nombres temáticos (Atleta Init...Bestia Élite) — de ahí la
+// contradicción real que veía el usuario ("13 días" en un lado, "3
+// entrenamientos perfectos" en otro, para el MISMO rango). Ahora este es el
+// único sistema: conserva los 6 nombres temáticos (la identidad visual que
+// ya existía), pero el ascenso es 100% por XP acumulado — perfil.tsx ya no
+// mantiene su propio cálculo de rango basado en racha.
+export interface RankTier { minXP: number; name: string; sub: string; icon: string; voltTheme?: boolean }
+
+export const RANK_TIERS: RankTier[] = [
+  { minXP: 0,    name: "ATLETA INIT",  sub: "NIVEL 1",      icon: "⬡" },
+  { minXP: 150,  name: "GUERRERO PRO", sub: "NIVEL 2",      icon: "◈" },
+  { minXP: 500,  name: "TITÁN",        sub: "NIVEL 3",      icon: "◆" },
+  { minXP: 1200, name: "COMANDANTE",   sub: "NIVEL 4",      icon: "✦" },
+  { minXP: 2500, name: "PREDADOR",     sub: "NIVEL 5",      icon: "⬢" },
+  { minXP: 5000, name: "BESTIA ÉLITE", sub: "NIVEL MÁXIMO", icon: "★", voltTheme: true },
 ];
 
 export function rankForXP(xp: number): string {

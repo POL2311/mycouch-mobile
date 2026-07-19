@@ -15,8 +15,9 @@ import {
 // Official palette (§3 of the assignment spec) — mirrored locally, same
 // convention as TemplateEditorModal/ChangeStageModal, since components/coach
 // sits outside the (coach) route group's _layout.tsx.
+const BG      = "#000000";
 const VOLT    = "#CCFF00";
-const CARD_BG = "#0F0F10";
+const CARD_BG = "#1C1C1E";
 const BORDER  = "#2C2C2E";
 const MUTED   = "#8E8E93";
 const athletic = { fontWeight: "900" as const, fontStyle: "italic" as const, textTransform: "uppercase" as const };
@@ -25,6 +26,23 @@ const FIELD = {
   backgroundColor: CARD_BG, borderWidth: 1, borderColor: BORDER,
   borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, color: "#fff", fontSize: 13,
 } as const;
+
+// Cápsula de selección de altura FIJA — nunca paddingVertical. Un chip sin
+// height explícito, dentro de un ScrollView horizontal sin height propio,
+// hereda `alignItems: "stretch"` del row por defecto: si el ScrollView
+// termina midiendo más alto de lo esperado (fácil dentro de un
+// KeyboardAvoidingView + Modal), el chip se estira para llenarlo — invisible
+// mientras está inactivo (fondo oscuro), pero grotescamente visible en el
+// verde neón activo. height fijo hace que sea físicamente imposible que se
+// deforme, sin importar qué haga el padre.
+const CHIP_H = 40;
+const chipStyle = (active: boolean) => ({
+  height: CHIP_H, paddingHorizontal: 16, borderRadius: 20,
+  alignItems: "center" as const, justifyContent: "center" as const,
+  flexDirection: "row" as const, gap: 6,
+  backgroundColor: active ? VOLT : CARD_BG,
+  borderWidth: 1, borderColor: active ? VOLT : BORDER,
+});
 
 // Lunes-primero para la barra de días — el modelo de datos en sí no depende
 // de este orden (configuracionPorDia es un objeto, no un arreglo).
@@ -137,7 +155,7 @@ export default function AssignDietModal({ visible, studentId, initialDieta, onCl
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.95)", paddingTop: 60 }}>
+        <View style={{ flex: 1, backgroundColor: BG, paddingTop: 60 }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginBottom: 14 }}>
             <Text style={{ ...athletic, fontSize: 18, color: "#fff" }}>
               {hasInitial ? "Editar dieta" : "Asignar dieta"}
@@ -147,10 +165,11 @@ export default function AssignDietModal({ visible, studentId, initialDieta, onCl
             </TouchableOpacity>
           </View>
 
-          {/* ── Barra de días ── */}
+          {/* ── Barra de días — altura fija, nunca se deforma ── */}
           <ScrollView
             horizontal showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingHorizontal: 20, gap: 8, paddingBottom: 14 }}
+            style={{ height: CHIP_H, flexGrow: 0 }}
+            contentContainerStyle={{ paddingHorizontal: 20, gap: 8, alignItems: "center" }}
           >
             {ORDEN_TABS.map(d => {
               const active = d === selectedDia;
@@ -158,12 +177,7 @@ export default function AssignDietModal({ visible, studentId, initialDieta, onCl
                 <Pressable
                   key={d}
                   onPress={() => { Haptics.selectionAsync().catch(() => {}); setSelectedDia(d); }}
-                  style={{
-                    paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999,
-                    backgroundColor: active ? VOLT : CARD_BG,
-                    borderWidth: 1, borderColor: active ? VOLT : BORDER,
-                    flexDirection: "row", alignItems: "center", gap: 6,
-                  }}
+                  style={chipStyle(active)}
                 >
                   <Text className="font-black" style={{ fontSize: 11, color: active ? "#000" : "#d4d4d8" }}>
                     {DIA_LABEL[d].slice(0, 3).toUpperCase()}
@@ -175,6 +189,7 @@ export default function AssignDietModal({ visible, studentId, initialDieta, onCl
               );
             })}
           </ScrollView>
+          <View style={{ height: 14 }} />
 
           <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
             <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: MUTED, marginBottom: 6 }}>
@@ -275,15 +290,18 @@ export default function AssignDietModal({ visible, studentId, initialDieta, onCl
             )}
           </ScrollView>
 
-          <View style={{ position: "absolute", bottom: 24, left: 20, right: 20 }}>
+          <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, alignItems: "center" }}>
             <TouchableOpacity
               activeOpacity={0.8}
               disabled={!canSave || saving}
               onPress={save}
               style={{
-                height: 52, borderRadius: 26, alignItems: "center", justifyContent: "center",
-                flexDirection: "row", gap: 8,
-                backgroundColor: VOLT, opacity: !canSave || saving ? 0.4 : 1,
+                width: "88%", alignSelf: "center", borderRadius: 25, height: 50,
+                justifyContent: "center", alignItems: "center", flexDirection: "row", gap: 8,
+                backgroundColor: VOLT, marginBottom: 20,
+                shadowColor: VOLT, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8,
+                elevation: 6,
+                opacity: !canSave || saving ? 0.4 : 1,
               }}
             >
               {saving && <ActivityIndicator size="small" color="#000" />}

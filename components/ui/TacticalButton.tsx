@@ -1,5 +1,5 @@
 import { Pressable, Text, ActivityIndicator, type PressableProps } from "react-native";
-import * as Haptics from "expo-haptics";
+import { triggerImpact } from "@/lib/haptics";
 
 type Variant = "primary" | "ghost" | "danger";
 
@@ -21,8 +21,8 @@ export function TacticalButton({
 }: TacticalButtonProps) {
   const vs = VARIANT_STYLES[variant];
 
-  async function handlePress(e: Parameters<NonNullable<PressableProps["onPress"]>>[0]) {
-    if (haptic) await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  function handlePress(e: Parameters<NonNullable<PressableProps["onPress"]>>[0]) {
+    if (haptic) triggerImpact();
     onPress?.(e);
   }
 

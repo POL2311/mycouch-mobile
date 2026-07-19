@@ -17,8 +17,16 @@ const FALLBACK_PHRASES = [
 
 interface MotivationState {
   activePhrase: string | null;
-  celebrate:    () => void;
-  dismiss:      () => void;
+  // `onDismiss` fires exactly once, right when the modal actually closes —
+  // NOT when celebrate() is called. This is what lets a caller chain a
+  // second full-screen presentation (a route push, another modal) strictly
+  // AFTER this one has finished unmounting, instead of firing both in the
+  // same tick. Two native full-screen presentations mounting simultaneously
+  // is a confirmed iOS crash (see nutrition/index.tsx's history — the
+  // caloric-goal screen and this modal used to fire from two independent
+  // useEffects and could both go up on the same render).
+  celebrate: (onDismiss?: () => void) => void;
+  dismiss:   () => void;
 }
 
 const MotivationContext = createContext<MotivationState | null>(null);
@@ -28,6 +36,7 @@ export function MotivationProvider({ children }: { children: React.ReactNode }) 
   const [phrases, setPhrases]           = useState<string[]>([]);
   const [activePhrase, setActivePhrase] = useState<string | null>(null);
   const phrasesRef = useRef<string[]>([]);
+  const onDismissRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -37,12 +46,18 @@ export function MotivationProvider({ children }: { children: React.ReactNode }) 
     });
   }, [token]);
 
-  const celebrate = useCallback(() => {
+  const celebrate = useCallback((onDismiss?: () => void) => {
+    onDismissRef.current = onDismiss ?? null;
     const pool = phrasesRef.current.length > 0 ? phrasesRef.current : FALLBACK_PHRASES;
     setActivePhrase(pool[Math.floor(Math.random() * pool.length)] ?? FALLBACK_PHRASES[0]!);
   }, []);
 
-  const dismiss = useCallback(() => setActivePhrase(null), []);
+  const dismiss = useCallback(() => {
+    setActivePhrase(null);
+    const cb = onDismissRef.current;
+    onDismissRef.current = null;
+    if (cb) cb();
+  }, []);
 
   return (
     <MotivationContext.Provider value={{ activePhrase, celebrate, dismiss }}>

@@ -1,5 +1,5 @@
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, Pressable, StyleSheet } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { ArrowRight, Timer, Check, AlertTriangle } from "lucide-react-native";
 import Svg, { Circle, Defs, LinearGradient, Stop } from "react-native-svg";
@@ -30,6 +30,7 @@ const SPARK_OPACITY = [0.35, 0.5, 0.4, 0.75, 1];
 export default function WorkoutSuccessScreen() {
   const { durationStr, biometrics, resetSession, syncStatus, syncCompletedSession, setLifecycle } = useWorkout();
   const { addXP } = useGamification();
+  const insets = useSafeAreaInsets();
 
   // This is a terminal success screen reached via router.push from the
   // WORKOUT tab, but that tab is registered with href:null (to hide it from
@@ -55,7 +56,7 @@ export default function WorkoutSuccessScreen() {
   const continueViewing = () => { setLifecycle("PAUSED"); router.replace("/(portal)"); };
 
   return (
-    <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1, backgroundColor: "#000000" }}>
+    <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: "#000000" }}>
       <ScrollView
         style={{ flex: 1 }}
         bounces={false}
@@ -211,8 +212,11 @@ export default function WorkoutSuccessScreen() {
         </View>
       </ScrollView>
 
-      {/* Master floor controller — closes the training loop */}
-      <View style={{ paddingHorizontal: 20, paddingBottom: 8 }}>
+      {/* Master floor controller — closes the training loop. Now that the
+          dock's gone from underneath this screen (see NO_DOCK_SCREENS in
+          (portal)/_layout.tsx), this button sits directly above the OS home
+          indicator — insets.bottom is what actually clears it, not a guess. */}
+      <View style={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 8 }}>
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={leave}

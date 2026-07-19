@@ -3,9 +3,9 @@ import {
   KeyboardAvoidingView, Platform,
 } from "react-native";
 import { useState, useCallback, useMemo } from "react";
-import * as Haptics from "expo-haptics";
 import { Plus, X, Trash2 } from "lucide-react-native";
 import { useAuth } from "@/lib/session";
+import { triggerImpact } from "@/lib/haptics";
 import { assignStudentRoutine, type EjercicioDTO } from "@/lib/coach";
 import {
   DIAS_SEMANA, DIA_LABEL, diaSemanaDeHoy, NUMEROS_SEMANA, SEMANA_LABEL, semanaActualPorFecha,
@@ -16,17 +16,34 @@ import {
 import ExercisePicker from "./ExercisePicker";
 
 // Misma paleta oficial que AssignDietModal — fondo absoluto, tarjetas
-// #0F0F10, acento #CCFF00.
-const VOLT    = "#CCFF00";
-const CARD_BG = "#0F0F10";
-const BORDER  = "#2C2C2E";
-const MUTED   = "#8E8E93";
+// #1C1C1E, acento #CCFF00.
+// Paleta alineada a .cursorrules §2: tarjetas reales en #0F0F10
+// (CARD_SURFACE), #1C1C1E reservado para campos/chips/separadores (CARD_BG).
+const BG            = "#000000";
+const VOLT          = "#CCFF00";
+const CARD_SURFACE  = "#0F0F10";
+const CARD_BG       = "#1C1C1E";
+const BORDER        = "#2C2C2E";
+const MUTED         = "#8E8E93";
 const athletic = { fontWeight: "900" as const, fontStyle: "italic" as const, textTransform: "uppercase" as const };
 
 const FIELD = {
   backgroundColor: CARD_BG, borderWidth: 1, borderColor: BORDER,
   borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, color: "#fff", fontSize: 13,
 } as const;
+
+// Cápsula de altura FIJA — ver el comentario gemelo en AssignDietModal.tsx
+// para el porqué (un chip sin height explícito, dentro de un ScrollView
+// horizontal sin height propio, se estira para llenar el alto ambiguo del
+// padre — invisible en reposo, grotesco en verde neón activo).
+const CHIP_H = 40;
+const chipStyle = (active: boolean) => ({
+  height: CHIP_H, paddingHorizontal: 16, borderRadius: 20,
+  alignItems: "center" as const, justifyContent: "center" as const,
+  flexDirection: "row" as const, gap: 6,
+  backgroundColor: active ? VOLT : CARD_BG,
+  borderWidth: 1, borderColor: active ? VOLT : BORDER,
+});
 
 const ORDEN_TABS: DiaSemana[] = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"];
 
@@ -134,7 +151,7 @@ export default function AssignRoutineModal({ visible, studentId, initialRoutine,
   }, [dia, patchEjercicio]);
 
   const copiarATodos = useCallback(() => {
-    Haptics.selectionAsync().catch(() => {});
+    triggerImpact();
     const fuente = semanas[selectedSemana][selectedDia]!;
     setSemanas(s => {
       const next = { ...s[selectedSemana] } as Record<DiaSemana, ConfiguracionDiaRutina>;
@@ -154,7 +171,7 @@ export default function AssignRoutineModal({ visible, studentId, initialRoutine,
   // arrancar con el mismo split en las 3 semanas y luego solo subir la
   // intensidad (peso mínimo / reps) semana a semana.
   const copiarSemana = useCallback(() => {
-    Haptics.selectionAsync().catch(() => {});
+    triggerImpact();
     const fuente = semanas[selectedSemana];
     setSemanas(s => {
       const next = { ...s };
@@ -226,7 +243,7 @@ export default function AssignRoutineModal({ visible, studentId, initialRoutine,
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
-        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.95)", paddingTop: 60 }}>
+        <View style={{ flex: 1, backgroundColor: BG, paddingTop: 60 }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginBottom: 14 }}>
             <Text style={{ ...athletic, fontSize: 18, color: "#fff" }}>
               {hasInitial ? "Editar rutina" : "Asignar rutina"}
@@ -236,16 +253,17 @@ export default function AssignRoutineModal({ visible, studentId, initialRoutine,
             </TouchableOpacity>
           </View>
 
-          {/* ── Barra de semanas (bloque de intensidad) ── */}
-          <View style={{ flexDirection: "row", paddingHorizontal: 20, gap: 8, marginBottom: 10 }}>
+          {/* ── Barra de semanas (bloque de intensidad) — altura fija, dos
+              líneas de texto, no se estira más allá de lo que su contenido pide. ── */}
+          <View style={{ flexDirection: "row", height: 54, paddingHorizontal: 20, gap: 8, marginBottom: 10 }}>
             {NUMEROS_SEMANA.map(n => {
               const active = n === selectedSemana;
               return (
                 <Pressable
                   key={n}
-                  onPress={() => { Haptics.selectionAsync().catch(() => {}); setSelectedSemana(n); }}
+                  onPress={() => { triggerImpact(); setSelectedSemana(n); }}
                   style={{
-                    flex: 1, paddingVertical: 10, borderRadius: 12, alignItems: "center",
+                    flex: 1, borderRadius: 12, alignItems: "center", justifyContent: "center",
                     backgroundColor: active ? VOLT : CARD_BG,
                     borderWidth: 1, borderColor: active ? VOLT : BORDER,
                   }}
@@ -261,23 +279,19 @@ export default function AssignRoutineModal({ visible, studentId, initialRoutine,
             })}
           </View>
 
-          {/* ── Barra de días ── */}
+          {/* ── Barra de días — altura fija, nunca se deforma ── */}
           <ScrollView
             horizontal showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ paddingHorizontal: 20, gap: 8, paddingBottom: 14 }}
+            style={{ height: CHIP_H, flexGrow: 0 }}
+            contentContainerStyle={{ paddingHorizontal: 20, gap: 8, alignItems: "center" }}
           >
             {ORDEN_TABS.map(d => {
               const active = d === selectedDia;
               return (
                 <Pressable
                   key={d}
-                  onPress={() => { Haptics.selectionAsync().catch(() => {}); setSelectedDia(d); }}
-                  style={{
-                    paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999,
-                    backgroundColor: active ? VOLT : CARD_BG,
-                    borderWidth: 1, borderColor: active ? VOLT : BORDER,
-                    flexDirection: "row", alignItems: "center", gap: 6,
-                  }}
+                  onPress={() => { triggerImpact(); setSelectedDia(d); }}
+                  style={chipStyle(active)}
                 >
                   <Text className="font-black" style={{ fontSize: 11, color: active ? "#000" : "#d4d4d8" }}>
                     {DIA_LABEL[d].slice(0, 3).toUpperCase()}
@@ -289,6 +303,7 @@ export default function AssignRoutineModal({ visible, studentId, initialRoutine,
               );
             })}
           </ScrollView>
+          <View style={{ height: 14 }} />
 
           <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
             <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: MUTED, marginBottom: 6 }}>
@@ -327,7 +342,7 @@ export default function AssignRoutineModal({ visible, studentId, initialRoutine,
               Ejercicios de {DIA_LABEL[selectedDia]} ({dia.ejercicios.length})
             </Text>
             {dia.ejercicios.map((ej, ei) => (
-              <View key={ej.id} style={{ backgroundColor: CARD_BG, borderWidth: 1, borderColor: BORDER, borderRadius: 14, padding: 14, marginBottom: 12 }}>
+              <View key={ej.id} style={{ backgroundColor: CARD_SURFACE, borderWidth: 1, borderColor: BORDER, borderRadius: 14, padding: 14, marginBottom: 12 }}>
                 <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                   <View style={{ flex: 1 }}>
                     <Text className="font-bold" style={{ fontSize: 13, color: "#fff" }} numberOfLines={1}>{ej.nombre}</Text>
@@ -405,15 +420,18 @@ export default function AssignRoutineModal({ visible, studentId, initialRoutine,
             )}
           </ScrollView>
 
-          <View style={{ position: "absolute", bottom: 24, left: 20, right: 20 }}>
+          <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, alignItems: "center" }}>
             <TouchableOpacity
               activeOpacity={0.8}
               disabled={!canSave || saving}
               onPress={save}
               style={{
-                height: 52, borderRadius: 26, alignItems: "center", justifyContent: "center",
-                flexDirection: "row", gap: 8,
-                backgroundColor: VOLT, opacity: !canSave || saving ? 0.4 : 1,
+                width: "88%", alignSelf: "center", borderRadius: 25, height: 50,
+                justifyContent: "center", alignItems: "center", flexDirection: "row", gap: 8,
+                backgroundColor: VOLT, marginBottom: 20,
+                shadowColor: VOLT, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8,
+                elevation: 6,
+                opacity: !canSave || saving ? 0.4 : 1,
               }}
             >
               {saving && <ActivityIndicator size="small" color="#000" />}

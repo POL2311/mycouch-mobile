@@ -5,6 +5,7 @@ import * as Haptics from "expo-haptics";
 import { usePortal } from "@/lib/portal";
 import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
+import { triggerImpact, triggerSuccess } from "@/lib/haptics";
 import type { RoutineExercise, RoutineDay } from "@/lib/portal";
 
 // ── Server sync payload shapes (mirrors mycouch's SessionExercise/SetEntry) ──
@@ -337,7 +338,7 @@ export function WorkoutProvider({ children }: { children: React.ReactNode }) {
     const newSets = current + 1;
     const isLast  = newSets >= ex.sets;
     // Tactile tick on every set, in addition to the lifecycle notification.
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    triggerImpact();
     setDoneSets(d => ({ ...d, [activeExIdx]: newSets }));
     if (payload) {
       setSetLogs(prev => {
@@ -431,7 +432,7 @@ export function WorkoutProvider({ children }: { children: React.ReactNode }) {
   const handleFinalizar = useCallback(async () => {
     setLifecycle("COMPLETED");
     setWorkoutDone(true);
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    triggerSuccess();
     const finalPayload: SavedSession = {
       sessionLifecycle: "COMPLETED",
       elapsedSeconds:   wDuration,

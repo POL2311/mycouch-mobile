@@ -22,6 +22,7 @@
         "NSMotionUsageDescription": "MyCoach uses motion for premium animations",
         "NSCameraUsageDescription": "MyCoach necesita acceso a la cámara para que puedas tomar y subir fotos de tus progresos físicos y comidas.",
         "NSPhotoLibraryUsageDescription": "MyCoach necesita acceso a tu galería para que puedas seleccionar fotos de tus entrenamientos y perfil.",
+        "NSMicrophoneUsageDescription": "MyCoach necesita acceso al micrófono para que puedas grabar notas de audio en Salas.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
@@ -48,7 +49,8 @@
           "fonts": []
         }
       ],
-      "expo-video"
+      "expo-video",
+      "expo-audio"
     ],
     "experiments": {
       "typedRoutes": true

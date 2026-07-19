@@ -306,6 +306,14 @@ export interface CoachStudentDetail {
   weightHistory:   WeightHistoryPoint[];
   measurements:    BodyMeasurementPoint[];
   todayMealChecks: DailyMealCheck[];
+  // Fecha real más reciente de CUALQUIER señal de actividad del alumno —
+  // DailyCheck de comida o de ejercicio (GET /api/students/[id]/checks, ya
+  // se pedía aquí pero solo se usaba filtrado a "hoy"), o su último
+  // lastWeighIn si es más reciente que cualquier check. isRedFlag/
+  // daysSinceLastActivity de abajo se calculan sobre ESTO, no solo sobre
+  // lastWeighIn — un alumno que marca comidas o series a diario pero no
+  // pesa hace semanas ya no se marca como inactivo por error.
+  lastActivityDate: string | null;
 }
 
 function asArray<T>(v: unknown): T[] {
@@ -314,6 +322,35 @@ function asArray<T>(v: unknown): T[] {
 
 function todayStr(): string {
   return new Date().toISOString().split("T")[0];
+}
+
+function mostRecentDateStr(candidates: (string | null | undefined)[]): string | null {
+  let best: string | null = null;
+  let bestTime = -Infinity;
+  for (const c of candidates) {
+    if (!c) continue;
+    const t = new Date(c).getTime();
+    if (!Number.isNaN(t) && t > bestTime) { bestTime = t; best = c; }
+  }
+  return best;
+}
+
+// Versión ligera de la señal de "última actividad real" usada por
+// fetchStudentDetail — solo pide GET /api/students/[id]/checks (sin
+// weightHistory/measurements/dietJson, que el roster no necesita) para que
+// AlumnosScreen pueda calcularla para CADA fila de la lista sin pagar el
+// costo completo de fetchStudentDetail por alumno. Nunca lanza: un fallo de
+// red para un alumno puntual solo hace que esa fila se quede con su
+// lastWeighIn (ya lo tenía disponible desde el roster), nunca rompe la lista.
+export async function fetchLastActivityDate(
+  studentId: string, token: string, lastWeighIn: string,
+): Promise<string | null> {
+  try {
+    const checks = await api<{ date: string }[]>(`/api/students/${studentId}/checks`, { token });
+    return mostRecentDateStr([...(Array.isArray(checks) ? checks.map(c => c.date) : []), lastWeighIn]);
+  } catch {
+    return lastWeighIn || null;
+  }
 }
 
 export async function fetchStudentDetail(studentId: string, token: string): Promise<CoachStudentDetail> {
@@ -348,6 +385,10 @@ export async function fetchStudentDetail(studentId: string, token: string): Prom
       : [{ date: student?.lastWeighIn ?? today, weight: student?.currentWeight ?? 0 }],
     measurements,
     todayMealChecks: diet.meals.map(m => ({ name: m.name, completed: doneToday.has(m.name) })),
+    // El check MÁS RECIENTE de cualquier tipo (comida o ejercicio), no solo
+    // los de hoy — checks ya trae la lista completa del endpoint, filtrarla
+    // a `date === today` arriba era solo para el checklist visual de hoy.
+    lastActivityDate: mostRecentDateStr([...checks.map(c => c.date), student?.lastWeighIn]),
   };
 }
 
@@ -572,6 +613,19 @@ export function postMotivationalPhrase(
 ): Promise<{ id: string }> {
   return api<{ id: string }>("/api/community/messages", {
     method: "POST", token, body: { coachId, content: `${MOTIVATION_PREFIX}${phrase}`, senderName },
+  });
+}
+
+// Mismo endpoint que postMotivationalPhrase, sin el MOTIVATION_PREFIX — un
+// comunicado oficial real (Módulo 4, Feed de la Comunidad del coach), no una
+// frase motivacional. Ambos crean la misma fila GroupMessage real; el prefijo
+// es la única convención de la app que distingue "para el pool de frases del
+// modal de celebración" de "aviso normal del Tablón".
+export function postGroupMessage(
+  coachId: string, content: string, senderName: string, token: string,
+): Promise<{ id: string }> {
+  return api<{ id: string }>("/api/community/messages", {
+    method: "POST", token, body: { coachId, content, senderName },
   });
 }
 

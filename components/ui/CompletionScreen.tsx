@@ -1,5 +1,5 @@
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MotiView } from "moti";
 import Svg, { Circle, Defs, LinearGradient, Stop } from "react-native-svg";
 import { Check, MoreVertical, User, ArrowRight } from "lucide-react-native";
@@ -42,8 +42,10 @@ export function CompletionScreen({
   onPressCta: () => void;
   footer?: React.ReactNode;
 }) {
+  const insets = useSafeAreaInsets();
+
   return (
-    <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1, backgroundColor: "#000000" }}>
+    <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: "#000000" }}>
       {/* Top brand nav */}
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 20, height: 44 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -123,14 +125,17 @@ export function CompletionScreen({
           {footer}
         </View>
 
-        {/* Master floor controller */}
+        {/* Master floor controller — now that the dock's gone from underneath
+            this screen (see NO_DOCK_SCREENS in (portal)/_layout.tsx),
+            insets.bottom is what actually clears the OS home indicator,
+            not a flat guessed margin. */}
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={onPressCta}
           style={{
             height: 56, borderRadius: 28, backgroundColor: VOLT,
             flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-            marginBottom: 32,
+            marginBottom: insets.bottom + 24,
           }}
         >
           <Text style={{ ...athletic, fontSize: 14, color: "#000" }}>{ctaLabel}</Text>

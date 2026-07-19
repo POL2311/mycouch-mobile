@@ -4,7 +4,7 @@ import {
 } from "react-native";
 import { useState, useCallback } from "react";
 import * as Haptics from "expo-haptics";
-import { Plus, X, Trash2 } from "lucide-react-native";
+import { Plus, X, Trash2, ClipboardList } from "lucide-react-native";
 import { useAuth } from "@/lib/session";
 import {
   DAYS, createTemplate, updateTemplate,
@@ -13,19 +13,41 @@ import {
 } from "@/lib/coach";
 import ExercisePicker from "./ExercisePicker";
 
+const BG     = "#000000";
 const VOLT   = "#CCFF00";
 const SILVER = "#8e8e93";
-const GLASS  = {
-  backgroundColor: "rgba(28, 28, 30, 0.4)",
-  borderWidth: 1,
-  borderColor: "rgba(255, 255, 255, 0.06)",
-} as const;
+const CARD_BG = "#1C1C1E";
+const BORDER  = "#2C2C2E";
 const athletic = { fontWeight: "900" as const, fontStyle: "italic" as const, textTransform: "uppercase" as const };
 
 const FIELD = {
-  ...GLASS, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10,
-  color: "#fff", fontSize: 13,
+  backgroundColor: CARD_BG, borderWidth: 1, borderColor: BORDER, borderRadius: 10,
+  paddingHorizontal: 12, paddingVertical: 10, color: "#fff", fontSize: 13,
 } as const;
+// GLASS kept for the diet/routine "day" cards — their translucent-over-card
+// look is intentional (nested one level deeper than a plain field), only
+// FIELD (actual inputs/chips) moves to the solid #1C1C1E per the official
+// palette.
+const GLASS  = {
+  backgroundColor: CARD_BG,
+  borderWidth: 1,
+  borderColor: BORDER,
+} as const;
+
+// Altura FIJA — un Pressable sin height propio dentro de una fila sin height
+// propia hereda `alignItems: "stretch"`; si el padre termina midiendo más
+// alto de lo esperado (fácil dentro de un ScrollView + Modal +
+// KeyboardAvoidingView), el chip se estira para llenarlo. Invisible con
+// fondo oscuro, grotesco en verde neón activo. height fijo lo hace imposible.
+const CHIP_H = 40;
+// Variante compacta — chips anidados dentro de una tarjeta de día ya
+// angosta (D · L · M · Mi...), altura fija más chica en vez del
+// tamaño estándar de CHIP_H para no desbordar esa fila.
+const smallChipStyle = (active: boolean) => ({
+  height: 28, paddingHorizontal: 10, borderRadius: 14,
+  alignItems: "center" as const, justifyContent: "center" as const,
+  backgroundColor: active ? VOLT : "rgba(255,255,255,0.05)",
+});
 
 const EMPTY_MEAL = (): DietMeal => ({ name: "", time: "", calories: 0, protein: 0, carbs: 0, fat: 0, items: [""] });
 const EMPTY_DAY = (slot: number): RoutineDayAuth => ({
@@ -34,6 +56,57 @@ const EMPTY_DAY = (slot: number): RoutineDayAuth => ({
 const EMPTY_DIET_DAY = (slot: number): DietDayAuth => ({
   day: DAYS[slot % 7]!, totalCalories: 0, macros: { protein: 0, carbs: 0, fat: 0 }, meals: [EMPTY_MEAL()],
 });
+
+// ── Catálogo de sugerencias — "Cargar desde Plantilla" (§3 de la pasada de
+// pulido UI). Presets fijos en la app, no vienen del backend: son un punto
+// de partida rápido para el modo "fija" del editor de dieta, editable acto
+// seguido como cualquier otro campo. Macros/comidas son realistas pero
+// aproximados — el coach los ajusta después, no es una herramienta de
+// precisión nutricional.
+interface DietPreset {
+  name: string;
+  totalCalories: number;
+  macros: { protein: number; carbs: number; fat: number };
+  meals: DietMeal[];
+}
+const DIET_PRESETS: DietPreset[] = [
+  {
+    name: "Hipertrofia Limpia",
+    totalCalories: 3000,
+    macros: { protein: 190, carbs: 350, fat: 80 },
+    meals: [
+      { name: "Desayuno", time: "07:00", calories: 650, protein: 40, carbs: 70, fat: 15, items: ["4 claras + 2 huevos enteros", "Avena 80g", "Plátano"] },
+      { name: "Comida", time: "13:00", calories: 850, protein: 55, carbs: 90, fat: 20, items: ["Pechuga de pollo 200g", "Arroz blanco 150g", "Verduras salteadas"] },
+      { name: "Pre-entreno", time: "17:00", calories: 400, protein: 25, carbs: 55, fat: 8, items: ["Batido de proteína", "Arroz inflado + miel"] },
+      { name: "Cena", time: "20:30", calories: 700, protein: 45, carbs: 75, fat: 22, items: ["Salmón o res 180g", "Papa al horno", "Ensalada con aceite de oliva"] },
+      { name: "Snack nocturno", time: "22:30", calories: 400, protein: 25, carbs: 60, fat: 15, items: ["Yogur griego", "Nueces", "Fruta de temporada"] },
+    ],
+  },
+  {
+    name: "Déficit Calórico",
+    totalCalories: 1800,
+    macros: { protein: 160, carbs: 140, fat: 50 },
+    meals: [
+      { name: "Desayuno", time: "07:30", calories: 350, protein: 30, carbs: 30, fat: 10, items: ["3 claras + 1 huevo entero", "Avena 40g"] },
+      { name: "Comida", time: "13:30", calories: 550, protein: 50, carbs: 45, fat: 15, items: ["Pechuga de pollo 180g", "Arroz integral 100g", "Verduras al vapor"] },
+      { name: "Snack", time: "16:30", calories: 200, protein: 20, carbs: 15, fat: 5, items: ["Yogur griego natural", "Almendras (10)"] },
+      { name: "Cena", time: "19:30", calories: 500, protein: 45, carbs: 40, fat: 15, items: ["Pescado blanco 180g", "Ensalada grande con aceite de oliva"] },
+      { name: "Extra proteína", time: "21:30", calories: 200, protein: 15, carbs: 10, fat: 5, items: ["Batido de proteína con agua"] },
+    ],
+  },
+  {
+    name: "Recomposición",
+    totalCalories: 2300,
+    macros: { protein: 180, carbs: 220, fat: 65 },
+    meals: [
+      { name: "Desayuno", time: "07:00", calories: 450, protein: 35, carbs: 45, fat: 12, items: ["Huevos enteros (3)", "Pan integral", "Aguacate"] },
+      { name: "Comida", time: "13:00", calories: 650, protein: 50, carbs: 65, fat: 18, items: ["Pechuga de pollo o pavo 180g", "Arroz o pasta 120g", "Verduras"] },
+      { name: "Pre-entreno", time: "17:00", calories: 350, protein: 25, carbs: 45, fat: 6, items: ["Batido de proteína", "Fruta"] },
+      { name: "Cena", time: "20:00", calories: 550, protein: 45, carbs: 45, fat: 18, items: ["Carne magra o pescado 180g", "Camote o papa", "Ensalada"] },
+      { name: "Snack", time: "22:00", calories: 300, protein: 25, carbs: 20, fat: 11, items: ["Requesón o yogur griego", "Nueces mixtas"] },
+    ],
+  },
+];
 
 // ── Reusable meal list editor — used both by the fixed week-round diet and,
 // per-day, by each DietDayAuth card. Extracted so the (fairly large) meal
@@ -152,8 +225,26 @@ export default function TemplateEditorModal({ visible, mode, existing, onClose, 
 
   const [saving, setSaving] = useState(false);
   const [error,  setError]  = useState<string | null>(null);
+  const [presetPickerOpen, setPresetPickerOpen] = useState(false);
 
   const canSave = name.trim().length > 0;
+
+  // Autocompleta kcal/macros/comidas desde un preset del catálogo — solo
+  // tiene sentido en modo "fija" (un único set de campos, igual que el
+  // preset), así que fuerza ese modo si el coach estaba en "por día".
+  // Reemplaza el arreglo de comidas entero (no lo añade al final) porque
+  // "cargar una plantilla" es un punto de partida, no un merge.
+  const applyPreset = useCallback((preset: DietPreset) => {
+    Haptics.selectionAsync().catch(() => {});
+    setDietMode("fija");
+    setTotalCalories(String(preset.totalCalories));
+    setProtein(String(preset.macros.protein));
+    setCarbs(String(preset.macros.carbs));
+    setFat(String(preset.macros.fat));
+    setMeals(preset.meals.map(m => ({ ...m, items: [...m.items] })));
+    if (!name.trim()) setName(preset.name);
+    setPresetPickerOpen(false);
+  }, [name]);
 
   const addMeal = useCallback(() => setMeals(m => [...m, EMPTY_MEAL()]), []);
   const removeMeal = useCallback((i: number) => setMeals(m => m.filter((_, idx) => idx !== i)), []);
@@ -279,7 +370,7 @@ export default function TemplateEditorModal({ visible, mode, existing, onClose, 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
-        <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.95)", paddingTop: 60 }}>
+        <View style={{ flex: 1, backgroundColor: BG, paddingTop: 60 }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginBottom: 18 }}>
             <Text style={{ ...athletic, fontSize: 18, color: "#fff" }}>
               {mode === "diet" ? "Editor de dieta" : "Editor de rutina"}
@@ -296,21 +387,60 @@ export default function TemplateEditorModal({ visible, mode, existing, onClose, 
               onChangeText={setName}
               placeholder={placeholder}
               placeholderTextColor="#52525b"
-              style={{ ...FIELD, marginBottom: 18 }}
+              style={{ ...FIELD, marginBottom: 12 }}
             />
+
+            {mode === "diet" && (
+              <View style={{ marginBottom: 18 }}>
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  onPress={() => { Haptics.selectionAsync().catch(() => {}); setPresetPickerOpen(o => !o); }}
+                  style={{
+                    height: 40, borderRadius: 10, borderWidth: 1, borderColor: VOLT,
+                    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+                  }}
+                >
+                  <ClipboardList size={14} color={VOLT} />
+                  <Text className="font-bold" style={{ fontSize: 11, color: VOLT, letterSpacing: 0.3 }}>
+                    Cargar desde Plantilla
+                  </Text>
+                </TouchableOpacity>
+
+                {presetPickerOpen && (
+                  <View style={{ ...GLASS, borderRadius: 12, marginTop: 8, overflow: "hidden" }}>
+                    {DIET_PRESETS.map((preset, i) => (
+                      <TouchableOpacity
+                        key={preset.name}
+                        activeOpacity={0.7}
+                        onPress={() => applyPreset(preset)}
+                        style={{
+                          paddingHorizontal: 14, paddingVertical: 12,
+                          borderTopWidth: i > 0 ? 1 : 0, borderTopColor: BORDER,
+                        }}
+                      >
+                        <Text className="font-bold" style={{ fontSize: 12, color: "#fff" }}>{preset.name}</Text>
+                        <Text className="font-mono" style={{ fontSize: 9, color: SILVER, marginTop: 2 }}>
+                          {preset.totalCalories} KCAL · P{preset.macros.protein} C{preset.macros.carbs} G{preset.macros.fat} · {preset.meals.length} comidas
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
+            )}
 
             {mode === "diet" ? (
               <>
                 {/* Fija (one target for the whole week) vs. Por día
                     (independent kcal/macros/meals per weekday). */}
-                <View style={{ flexDirection: "row", backgroundColor: "#151517", borderRadius: 12, padding: 3, marginBottom: 18 }}>
+                <View style={{ flexDirection: "row", height: CHIP_H, backgroundColor: "#151517", borderRadius: 12, padding: 3, marginBottom: 18 }}>
                   {(["fija", "porDia"] as const).map(m => {
                     const active = dietMode === m;
                     return (
                       <Pressable
                         key={m}
                         onPress={() => { Haptics.selectionAsync().catch(() => {}); setDietMode(m); }}
-                        style={{ flex: 1, paddingVertical: 9, borderRadius: 9, alignItems: "center", backgroundColor: active ? VOLT : "transparent" }}
+                        style={{ flex: 1, borderRadius: 9, alignItems: "center", justifyContent: "center", backgroundColor: active ? VOLT : "transparent" }}
                       >
                         <Text className="font-black" style={{ fontSize: 11, color: active ? "#000" : SILVER }}>
                           {m === "fija" ? "Fija (toda la semana)" : "Por día"}
@@ -351,10 +481,7 @@ export default function TemplateEditorModal({ visible, mode, existing, onClose, 
                             <Pressable
                               key={d}
                               onPress={() => { Haptics.selectionAsync().catch(() => {}); patchDietDay(di, { day: d }); }}
-                              style={{
-                                paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999,
-                                backgroundColor: day.day === d ? VOLT : "rgba(255,255,255,0.05)",
-                              }}
+                              style={smallChipStyle(day.day === d)}
                             >
                               <Text style={{ fontSize: 8, color: day.day === d ? "#000" : SILVER, fontWeight: "700" }}>{d.slice(0, 3)}</Text>
                             </Pressable>
@@ -421,10 +548,7 @@ export default function TemplateEditorModal({ visible, mode, existing, onClose, 
                           <Pressable
                             key={d}
                             onPress={() => { Haptics.selectionAsync().catch(() => {}); patchDay(di, { day: d }); }}
-                            style={{
-                              paddingHorizontal: 8, paddingVertical: 4, borderRadius: 999,
-                              backgroundColor: day.day === d ? VOLT : "rgba(255,255,255,0.05)",
-                            }}
+                            style={smallChipStyle(day.day === d)}
                           >
                             <Text style={{ fontSize: 8, color: day.day === d ? "#000" : SILVER, fontWeight: "700" }}>{d.slice(0, 3)}</Text>
                           </Pressable>
@@ -517,15 +641,18 @@ export default function TemplateEditorModal({ visible, mode, existing, onClose, 
             )}
           </ScrollView>
 
-          <View style={{ position: "absolute", bottom: 24, left: 20, right: 20 }}>
+          <View style={{ position: "absolute", bottom: 0, left: 0, right: 0, alignItems: "center" }}>
             <TouchableOpacity
               activeOpacity={0.8}
               disabled={!canSave || saving}
               onPress={save}
               style={{
-                height: 52, borderRadius: 26, alignItems: "center", justifyContent: "center",
-                flexDirection: "row", gap: 8,
-                backgroundColor: VOLT, opacity: !canSave || saving ? 0.4 : 1,
+                width: "88%", alignSelf: "center", borderRadius: 25, height: 50,
+                justifyContent: "center", alignItems: "center", flexDirection: "row", gap: 8,
+                backgroundColor: VOLT, marginBottom: 20,
+                shadowColor: VOLT, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8,
+                elevation: 6,
+                opacity: !canSave || saving ? 0.4 : 1,
               }}
             >
               {saving && <ActivityIndicator size="small" color="#000" />}

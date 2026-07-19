@@ -6,18 +6,19 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { router, useFocusEffect } from "expo-router";
 import { MotiView, AnimatePresence } from "moti";
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import * as Haptics from "expo-haptics";
 import { Droplet, Check, ArrowLeftRight } from "lucide-react-native";
 import { BlurView } from "expo-blur";
 import Animated, {
   useSharedValue, useAnimatedScrollHandler, useAnimatedStyle,
   interpolate, Extrapolation,
 } from "react-native-reanimated";
-import Svg, { Defs, LinearGradient, Stop, Rect } from "react-native-svg";
+import Svg, { Defs, LinearGradient, Stop, Rect, Polygon } from "react-native-svg";
 import { usePortal, resolveDietDay } from "@/lib/portal";
 import { useAuth } from "@/lib/session";
-import { useMotivation } from "@/lib/motivation";
 import { api } from "@/lib/api";
+import { triggerImpact, triggerSuccess } from "@/lib/haptics";
+import { ShimmerScreen } from "@/components/ShimmerLoader";
+import { tacticalSubHeader } from "@/lib/typography";
 import type { Meal } from "@/lib/portal";
 
 // ── SF Dark Pro / Volt token registry (MYCOACH_GLOBAL_MASTER_SPEC §3.1) ──────
@@ -37,6 +38,11 @@ const WEEKDAY_LONG: Record<number, string> = {
   1: "LUNES", 2: "MARTES", 3: "MIÉRCOLES", 4: "JUEVES",
   5: "VIERNES", 6: "SÁBADO", 7: "DOMINGO",
 };
+
+function initialsOf(name: string | undefined): string {
+  if (!name) return "23";
+  return name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase();
+}
 
 function appToday(): number {
   const js = new Date().getDay();          // 0=Sunday … 6=Saturday
@@ -282,6 +288,39 @@ function foodIconFor(name: string): string {
 //  VISUAL MODULES
 // ═════════════════════════════════════════════════════════════════════════════
 
+// ── Brand row — clonado 1:1 de la arquitectura de app/(portal)/stats/index.tsx
+// (Módulo 3 "unificación de navegación"): isotype diamante "F" + wordmark
+// MYCOACH a la izquierda, badge de perfil circular anillado en volt a la
+// derecha. Dieta no tenía ningún header de marca — esta pantalla arrancaba
+// directo en el StreakCard. El número del badge usa el streak real del
+// alumno (usePortal) en vez del placeholder estático "23" que trae stats. ──
+function BrandHeader({ initials, streak }: { initials: string; streak: number }) {
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 20, height: 48 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+        <View style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
+          <Svg width={40} height={40} viewBox="0 0 62 62" style={StyleSheet.absoluteFill}>
+            <Polygon points="31,3 59,31 31,59 3,31" stroke={VOLT} strokeWidth={3} fill="none" />
+          </Svg>
+          <Text style={{ fontWeight: "900", fontStyle: "italic", fontSize: 16, color: VOLT }}>F</Text>
+        </View>
+        <Text className="font-bold uppercase" style={{ color: "#fff", fontSize: 14, letterSpacing: 3 }}>
+          MYCOACH
+        </Text>
+      </View>
+      <View
+        style={{
+          position: "absolute", right: 0,
+          width: 44, height: 44, borderRadius: 22, borderWidth: 2, borderColor: VOLT,
+          justifyContent: "center", alignItems: "center", backgroundColor: "#1C1C1E",
+        }}
+      >
+        <Text className="font-black" style={{ fontSize: 13, color: "#fff" }}>{streak > 0 ? streak : initials}</Text>
+      </View>
+    </View>
+  );
+}
+
 // ── Cyber Command Banner — SYSTEM_ENFORCED_DIRECTIVE (overhaul spec §1) ──────
 function DirectiveBanner({ text }: { text: string }) {
   return (
@@ -313,7 +352,7 @@ function DirectiveBanner({ text }: { text: string }) {
         >
           <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: VOLT }} />
         </MotiView>
-        <Text className="font-black uppercase" style={{ fontSize: 10, letterSpacing: 2, color: VOLT }}>
+        <Text style={tacticalSubHeader}>
           SYSTEM_ENFORCED_DIRECTIVE
         </Text>
       </View>
@@ -338,8 +377,8 @@ function DirectiveBanner({ text }: { text: string }) {
 // ── Glass slab — real backdrop blur + carbon tint + volt spine ───────────────
 // Shadow lives on the outer wrapper (overflow:hidden would clip it); the blur
 // capsule clips itself. `dimezisBlurView` enables true blur on Android.
-function GlassSlab({ children, delay = 0, style }: {
-  children: React.ReactNode; delay?: number; style?: object;
+function GlassSlab({ children, delay = 0, style, glow = false }: {
+  children: React.ReactNode; delay?: number; style?: object; glow?: boolean;
 }) {
   return (
     <MotiView
@@ -350,9 +389,13 @@ function GlassSlab({ children, delay = 0, style }: {
         borderRadius: 24,
         marginBottom: 24,
         shadowColor: VOLT,
-        shadowOpacity: 0.06,
-        shadowRadius: 20,
+        // Elemento crítico activo (Módulo 3, racha actual) — resplandor LED
+        // pleno (lib/neon.ts's neonGlow) en vez del halo apenas perceptible
+        // que llevan el resto de los bentos.
+        shadowOpacity: glow ? 0.4 : 0.06,
+        shadowRadius:  glow ? 12  : 20,
         shadowOffset: { width: 0, height: 0 },
+        elevation: glow ? 8 : 0,
       }}
     >
       <BlurView
@@ -364,7 +407,7 @@ function GlassSlab({ children, delay = 0, style }: {
           overflow: "hidden",
           backgroundColor: "rgba(18,18,20,0.65)",
           borderWidth: 1,
-          borderColor: "rgba(255,255,255,0.05)",
+          borderColor: glow ? VOLT : "rgba(255,255,255,0.05)",
           borderLeftWidth: 3,
           borderLeftColor: VOLT,
           ...style,
@@ -381,7 +424,7 @@ function StreakCard({ dayLabel, streak, activeDate, perfectDay }: {
   dayLabel: string; streak: number; activeDate: string; perfectDay?: boolean;
 }) {
   return (
-    <GlassSlab style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 20, paddingVertical: 16 }}>
+    <GlassSlab glow style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 20, paddingVertical: 16 }}>
       <View
         className="items-center justify-center"
         style={{ width: 40, height: 40, borderRadius: 16, backgroundColor: "rgba(204,255,0,0.08)" }}
@@ -908,8 +951,8 @@ function MealDetailSheet({
   if (!meal) return null;
   const appliedForTarget = swapTarget ? swaps[swapTarget.key] : undefined;
 
-  const dismiss = async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  const dismiss = () => {
+    triggerImpact();
     if (swapTarget) onSwapTarget(null); else onClose();
   };
 
@@ -1000,18 +1043,23 @@ function MealDetailSheet({
                 )}
               </ScrollView>
 
-              {/* Massive Volt confirm CTA */}
+              {/* Cápsula CONFIRMAR COMIDA — sólida verde neón, esquinas
+                  aerodinámicas, altura fija (.cursorrules §4 "Contraste").
+                  El estado ya confirmado conserva su propia variante
+                  translúcida con borde — sigue necesitando leerse distinto
+                  de "aún sin confirmar", pero sin volver a caer en fondo
+                  oscuro/negro para el estado primario. */}
               <View className="px-5 pt-4">
                 <Pressable
                   onPress={onConfirm}
                   disabled={confirming}
                   className="items-center justify-center"
                   style={({ pressed }) => ({
-                    backgroundColor: checked ? "rgba(204,255,0,0.12)" : pressed ? VOLT_DIM : VOLT,
+                    height: 50,
+                    borderRadius: 25,
+                    backgroundColor: checked ? "rgba(204,255,0,0.12)" : pressed ? VOLT_DIM : "#CCFF00",
                     borderWidth: checked ? 1.5 : 0,
                     borderColor: "rgba(204,255,0,0.5)",
-                    borderRadius: 8,
-                    paddingVertical: 16,
                     opacity: confirming ? 0.6 : 1,
                     ...(checked ? {} : {
                       shadowColor: VOLT, shadowOpacity: 0.35, shadowRadius: 18, shadowOffset: { width: 0, height: 0 },
@@ -1019,13 +1067,13 @@ function MealDetailSheet({
                   })}
                 >
                   {confirming
-                    ? <ActivityIndicator size="small" color={checked ? C_PROTEIN : "#000"} />
+                    ? <ActivityIndicator size="small" color={checked ? C_PROTEIN : "#000000"} />
                     : (
                       <View className="flex-row items-center justify-center" style={{ gap: 8 }}>
                         {checked && <Check size={16} color={C_PROTEIN} strokeWidth={3} />}
                         <Text
-                          className="font-black uppercase"
-                          style={{ fontSize: 16, letterSpacing: 1, color: checked ? C_PROTEIN : ON_VOLT }}
+                          className="uppercase"
+                          style={{ fontSize: 16, fontWeight: "800", letterSpacing: 1, color: checked ? C_PROTEIN : "#000000" }}
                         >
                           {checked ? "COMIDA CONFIRMADA — DESMARCAR" : "CONFIRMAR COMIDA"}
                         </Text>
@@ -1255,7 +1303,6 @@ function MealDetailSheet({
 export default function NutritionTab() {
   const { token }               = useAuth();
   const { student, detail, isLoading, refresh } = usePortal();
-  const { celebrate } = useMotivation();
 
   // PortalProvider fetches once on mount only — without this, a diet the
   // coach just assigned (dietJson, via PUT /api/students/[id]) wouldn't show
@@ -1352,7 +1399,7 @@ export default function NutritionTab() {
     // Hard compliance cap: at or beyond WATER_TARGET_ML the circuit freezes —
     // no haptic, no optimistic mutation, no POST.
     if (!token || waterBusy || waterMl >= WATER_TARGET_ML) return;
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    triggerImpact();
     setSyncError(null);
     setWaterBusy(true);
     const prev = waterMl;
@@ -1378,8 +1425,8 @@ export default function NutritionTab() {
     const nextChecked  = !wasChecked;
 
     // Success notification on confirmation; light impact when unchecking.
-    if (nextChecked) await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    else             await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (nextChecked) triggerSuccess();
+    else             triggerImpact();
     setSyncError(null);
     setCheckedKeys(prev => {
       const next = new Set(prev);
@@ -1430,8 +1477,6 @@ export default function NutritionTab() {
   const proteinConsumed = meals.reduce((s, m) => checkedKeys.has(m.name) ? s + num(m.macros?.protein) : s, 0);
   const completedCount  = meals.filter(m => checkedKeys.has(m.name)).length;
   const perfectDay      = meals.length > 0 && completedCount === meals.length;
-  // §4.3.1 trigger: remaining balance hits 0 ⇔ caloricPct reaches 1.
-  const caloricPct      = totalTarget > 0 ? totalConsumed / totalTarget : 0;
 
   // Pending first, completed last — spec §3.2.6 sorting rule.
   const sortedMeals = [...meals].sort(
@@ -1442,23 +1487,36 @@ export default function NutritionTab() {
   const prevPerfect = useRef(false);
   useEffect(() => {
     if (perfectDay && !prevPerfect.current) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      triggerSuccess();
     }
     prevPerfect.current = perfectDay;
   }, [perfectDay]);
 
-  // Full-screen celebration: navigates once when the caloric objective is
-  // reached; re-arms if the balance drops below target again or the browsed
-  // day changes.
+  // ── Disparador de éxito único — "checklist de nutrición al 100%" ─────────
+  // Antes había DOS useEffect independientes (uno por caloricPct>=1 que
+  // navegaba a nutrition/success, otro por perfectDay que abría el modal
+  // motivacional) — ambas condiciones se vuelven verdaderas casi siempre en
+  // el MISMO tick (marcar la última comida sube el checklist a 100% y el
+  // consumo calórico al mismo tiempo), así que los dos disparaban a la vez:
+  // un <Modal> de pantalla completa montándose sobre otra presentación de
+  // pantalla completa (el push de router) crashea en iOS. Luego pasó por una
+  // versión intermedia que abría el modal motivacional Y DESPUÉS empujaba
+  // esta pantalla de resumen — ya no crasheaba, pero mostraba dos "éxitos"
+  // consecutivos para el mismo evento (.cursorrules — eliminar la alerta
+  // genérica intermedia). Ahora hay un solo disparador, una sola condición
+  // (perfectDay), y una sola presentación: esta pantalla PROTOCOLO
+  // COMPLETADO de alta fidelidad, directo, sin el modal motivacional de por
+  // medio. El modal motivacional (lib/motivation.tsx) sigue existiendo tal
+  // cual para su otro disparador real — última serie del día en
+  // app/(portal)/index.tsx — que no tiene una pantalla de resumen propia
+  // detrás y por lo tanto no duplica nada.
   const celebratedRef = useRef(false);
   useEffect(() => { celebratedRef.current = false; }, [activeDate]);
   useEffect(() => {
-    const reached = caloricPct >= 1;
-    if (reached && !celebratedRef.current) {
+    if (perfectDay && !celebratedRef.current) {
       celebratedRef.current = true;
-      // Dismiss the detail sheet first — a modal push while another native
-      // Modal is mounted is the iOS stacked-modal touch lock we already
-      // eliminated once.
+      // Cierra cualquier hoja de detalle abierta ANTES de navegar — evita
+      // que quede una sheet nativa montada por debajo de la nueva pantalla.
       setSwapTarget(null);
       setOpenMeal(null);
       router.push({
@@ -1471,24 +1529,8 @@ export default function NutritionTab() {
         },
       });
     }
-    if (!reached) celebratedRef.current = false;
-  }, [caloricPct, totalConsumed, proteinConsumed, completedCount, meals.length]);
-
-  // Disparador de éxito — "checklist de nutrición al 100%": mismo patrón
-  // false→true + re-arme por activeDate que el logro de kcal arriba, pero
-  // dispara el modal compartido (MotivationProvider) en vez de navegar — es
-  // un logro distinto (comidas completas, no necesariamente el objetivo
-  // calórico exacto) y puede coincidir con el de kcal sin pisarse: cada uno
-  // tiene su propio guard.
-  const perfectDayCelebratedRef = useRef(false);
-  useEffect(() => { perfectDayCelebratedRef.current = false; }, [activeDate]);
-  useEffect(() => {
-    if (perfectDay && !perfectDayCelebratedRef.current) {
-      perfectDayCelebratedRef.current = true;
-      celebrate();
-    }
-    if (!perfectDay) perfectDayCelebratedRef.current = false;
-  }, [perfectDay, celebrate]);
+    if (!perfectDay) celebratedRef.current = false;
+  }, [perfectDay, totalConsumed, proteinConsumed, completedCount, meals.length]);
 
   // Scroll-reactive directive collapse — scrolling the meal list interpolates
   // the banner's height/opacity to 0 so cards roll up under the calendar strip.
@@ -1506,19 +1548,14 @@ export default function NutritionTab() {
   }));
 
   const selectDay = useCallback((day: number) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    triggerImpact();
     setActiveDay(day);
   }, []);
 
   if (isLoading) {
     return (
       <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: "#070708" }}>
-        <View className="flex-1 items-center justify-center">
-          <ActivityIndicator color={VOLT} />
-          <Text className="text-[11px] uppercase mt-3" style={{ color: T_TERTIARY, letterSpacing: 1.2 }}>
-            CARGANDO PLAN...
-          </Text>
-        </View>
+        <ShimmerScreen variant="exercise-list" label="CARGANDO PLAN..." />
       </SafeAreaView>
     );
   }
@@ -1557,6 +1594,9 @@ export default function NutritionTab() {
         onScroll={onScroll}
         scrollEventThrottle={16}
       >
+        {/* ── Top 0: brand header (Módulo 3) ── */}
+        <BrandHeader initials={initialsOf(student?.name)} streak={student?.streak ?? 0} />
+
         {/* ── Top 1 (the crown): streak card ── */}
         <StreakCard
           dayLabel={WEEKDAY_LONG[activeDay]}

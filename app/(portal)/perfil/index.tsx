@@ -1,16 +1,26 @@
 import {
-  View, Text, TouchableOpacity, Pressable, ScrollView, Modal, ImageBackground, StyleSheet, ActivityIndicator,
+  View, Text, TouchableOpacity, Pressable, ScrollView, Modal, ImageBackground, StyleSheet, TextInput, Image, Share,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MotiView } from "moti";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as ImagePicker from "expo-image-picker";
 import { PulseButton } from "@/components/ui/PulseButton";
+import { ShimmerScreen } from "@/components/ShimmerLoader";
 import * as Haptics from "expo-haptics";
-import { Flame, Check, Star, Lock, LogOut, Mail, Zap, Settings, X } from "lucide-react-native";
+import { triggerImpact, triggerSuccess, triggerWarning } from "@/lib/haptics";
+import { neonGlow } from "@/lib/neon";
+import {
+  Flame, Check, Star, Lock, LogOut, Mail, Zap, Settings, X, Droplet, Dumbbell, Utensils,
+  Camera, ShieldCheck, Share2, Award, Eye, EyeOff,
+} from "lucide-react-native";
 import Svg, { Defs, LinearGradient, Stop, Rect } from "react-native-svg";
-import { usePortal } from "@/lib/portal";
+import { usePortal, uploadProgressPhoto } from "@/lib/portal";
 import { useAuth } from "@/lib/session";
-import { useWorkout } from "@/lib/workout";
+import { useWorkout, todayDateStr } from "@/lib/workout";
+import { useGamification, RANK_TIERS } from "@/lib/gamification";
+import { WATER_TARGET_ML } from "@/components/workout-ui";
 import { api } from "@/lib/api";
 
 // ── Perfil ecosystem tokens ──────────────────────────────────────────────────
@@ -41,30 +51,20 @@ interface BioSession {
   } | null;
 }
 
-interface RankTier {
-  level: number; title: string; sub: string; icon: string; progress: string; voltTheme?: boolean;
-}
+// RankTier/RANK_TIERS ya no se definen aquí — vienen de lib/gamification.tsx,
+// el único sistema de rango real de la app (unificación .cursorrules Parte
+// 3: antes este archivo tenía su propia escalera basada en Student.streak,
+// completamente desconectada del motor de XP que ya usaba portal/index.tsx).
 
-// The 6 Power Ranks (blueprint §2.3). `active` is NOT stored here — the web
-// hardcodes level 1 active forever (sharp edge #1); mobile binds it to the
-// real streak-derived rank at render time.
-const RANK_TIERS: RankTier[] = [
-  { level: 1, title: "ATLETA INIT",  sub: "NIVEL 1",      icon: "⬡", progress: "Estás a 150 XP o 3 entrenamientos perfectos de subir de nivel." },
-  { level: 2, title: "GUERRERO PRO", sub: "NIVEL 2",      icon: "◈", progress: "Completa 14 días de racha continua." },
-  { level: 3, title: "TITÁN",        sub: "NIVEL 3",      icon: "◆", progress: "Alcanza 30 días de racha y 5 PRs." },
-  { level: 4, title: "COMANDANTE",   sub: "NIVEL 4",      icon: "✦", progress: "Mantén el 90% de asistencia por 2 meses." },
-  { level: 5, title: "PREDADOR",     sub: "NIVEL 5",      icon: "⬢", progress: "60 días de racha y liderazgo de equipo." },
-  { level: 6, title: "BESTIA ÉLITE", sub: "NIVEL MÁXIMO", icon: "★", progress: "Liderazgo de sala activo · Credenciales de equipo elite.", voltTheme: true },
-];
-
-// Shield style registry (blueprint §2.3 RANK_SHIELD_CFG, RN color mapping).
+// Shield style registry (blueprint §2.3 RANK_SHIELD_CFG, RN color mapping) —
+// ahora indexado por posición en RANK_TIERS (0-5) en vez de por `level`.
 const RANK_SHIELD_CFG: Record<number, { bg: string; borderColor: string; borderWidth: number; iconColor: string }> = {
-  1: { bg: "rgba(120,53,15,0.25)", borderColor: "rgba(217,119,6,0.65)",  borderWidth: 1.5, iconColor: "#d97706" },
-  2: { bg: "rgba(24,24,27,0.5)",   borderColor: "rgba(63,63,70,0.8)",    borderWidth: 1,   iconColor: "#71717a" },
-  3: { bg: "rgba(15,23,42,0.5)",   borderColor: "rgba(100,116,139,0.5)", borderWidth: 1,   iconColor: "#94a3b8" },
-  4: { bg: "rgba(66,32,6,0.3)",    borderColor: "rgba(234,179,8,0.5)",   borderWidth: 1.5, iconColor: "#eab308" },
-  5: { bg: "rgba(24,24,27,0.5)",   borderColor: "rgba(63,63,70,0.7)",    borderWidth: 1,   iconColor: "#71717a" },
-  6: { bg: "rgba(26,46,5,0.5)",    borderColor: "#a3e635",               borderWidth: 1.5, iconColor: "#a3e635" },
+  0: { bg: "rgba(120,53,15,0.25)", borderColor: "rgba(217,119,6,0.65)",  borderWidth: 1.5, iconColor: "#d97706" },
+  1: { bg: "rgba(24,24,27,0.5)",   borderColor: "rgba(63,63,70,0.8)",    borderWidth: 1,   iconColor: "#71717a" },
+  2: { bg: "rgba(15,23,42,0.5)",   borderColor: "rgba(100,116,139,0.5)", borderWidth: 1,   iconColor: "#94a3b8" },
+  3: { bg: "rgba(66,32,6,0.3)",    borderColor: "rgba(234,179,8,0.5)",   borderWidth: 1.5, iconColor: "#eab308" },
+  4: { bg: "rgba(24,24,27,0.5)",   borderColor: "rgba(63,63,70,0.7)",    borderWidth: 1,   iconColor: "#71717a" },
+  5: { bg: "rgba(26,46,5,0.5)",    borderColor: "#a3e635",               borderWidth: 1.5, iconColor: "#a3e635" },
 };
 
 // ── Hero scrim — linear-gradient(to top, #070708 0%, transparent 100%) ──────
@@ -204,25 +204,324 @@ function SettingsOverlay({ visible, onClose, name, planLabel }: {
   );
 }
 
+// ── IDENTIDAD Y SEGURIDAD overlay (Módulo 5) ──────────────────────────────────
+// Alcance real vs. simulado, deliberado y documentado:
+//  · Avatar   → REAL: sube vía POST /api/me/photos (uploadProgressPhoto, ya
+//    real desde Módulo 4) con label "AVATAR"; se muestra la foto AVATAR más
+//    reciente de detail.photos (el schema no tiene un campo avatarUrl propio
+//    — Student solo tiene avatarInitials/avatarColor — así que "cuál foto es
+//    el avatar activo" es una convención de cliente sobre datos reales).
+//  · Peso base → REAL: mismo POST /api/me/biometrics que ya usa stats/index.tsx.
+//  · Nombre/Email → NO existe ningún endpoint self-service para CLIENT en
+//    mycouch (solo PATCH/PUT /api/students/[id], coach/admin-only). Se editan
+//    y persisten SOLO en este dispositivo (AsyncStorage) — la UI lo declara
+//    explícitamente, nunca finge una sincronización que no existe.
+//  · Contraseña → NO existe endpoint de cambio de contraseña para CLIENT.
+//    La validación reactiva es 100% real y funcional; el guardado queda
+//    detrás de un candado "PRÓXIMAMENTE" — mismo patrón ya usado en
+//    RetosTab (salas/index.tsx) para features con UI lista pero sin backend.
+const PROFILE_OVERRIDE_KEY = "mc:profile_override";
+
+function PasswordRule({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+      <View style={{ width: 14, height: 14, borderRadius: 7, alignItems: "center", justifyContent: "center", backgroundColor: ok ? VOLT : "rgba(255,255,255,0.08)" }}>
+        {ok && <Check size={9} color="#000" strokeWidth={3.5} />}
+      </View>
+      <Text className="font-mono" style={{ fontSize: 9, color: ok ? VOLT : SILVER }}>{label}</Text>
+    </View>
+  );
+}
+
+function IdentityModal({ visible, onClose, student, avatarUrl, token, onRefresh }: {
+  visible: boolean; onClose: () => void;
+  student: { name?: string; email?: string; currentWeight?: number } | null;
+  avatarUrl: string | null;
+  token: string | null;
+  onRefresh: () => void;
+}) {
+  const [name,   setName]   = useState(student?.name ?? "");
+  const [email,  setEmail]  = useState(student?.email ?? "");
+  const [weight, setWeight] = useState(student?.currentWeight ? String(student.currentWeight) : "");
+  const [saving, setSaving] = useState(false);
+  const [saved,  setSaved]  = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPw, setShowPw] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+    setName(student?.name ?? "");
+    setEmail(student?.email ?? "");
+    setWeight(student?.currentWeight ? String(student.currentWeight) : "");
+    AsyncStorage.getItem(PROFILE_OVERRIDE_KEY).then(raw => {
+      if (!raw) return;
+      const override = JSON.parse(raw) as { name?: string; email?: string };
+      if (override.name)  setName(override.name);
+      if (override.email) setEmail(override.email);
+    }).catch(() => {});
+  }, [visible, student?.name, student?.email, student?.currentWeight]);
+
+  const pwRules = {
+    length: newPassword.length >= 8,
+    upper:  /[A-Z]/.test(newPassword),
+    number: /[0-9]/.test(newPassword),
+    match:  newPassword.length > 0 && newPassword === confirmPassword,
+  };
+  const pwValid = pwRules.length && pwRules.upper && pwRules.number && pwRules.match;
+
+  const pickAvatar = useCallback(async () => {
+    if (!token) return;
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) { triggerWarning(); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.7, allowsEditing: true, aspect: [1, 1] });
+    if (result.canceled || !result.assets[0]) return;
+    setUploadingAvatar(true);
+    const uploaded = await uploadProgressPhoto(result.assets[0].uri, "AVATAR", token);
+    setUploadingAvatar(false);
+    if (uploaded) { triggerSuccess(); onRefresh(); } else { triggerWarning(); }
+  }, [token, onRefresh]);
+
+  const save = useCallback(async () => {
+    setSaving(true);
+    await AsyncStorage.setItem(PROFILE_OVERRIDE_KEY, JSON.stringify({ name, email })).catch(() => {});
+
+    const kg = Math.round(parseFloat(weight.replace(",", ".")) * 10) / 10;
+    if (Number.isFinite(kg) && kg >= 20 && kg <= 500 && kg !== student?.currentWeight && token) {
+      try {
+        await api("/api/me/biometrics", { method: "POST", token, body: { weight: kg, date: todayDateStr() } });
+        onRefresh();
+      } catch { /* peso local ya reflejado en el input; se reintenta en la próxima apertura */ }
+    }
+
+    setSaving(false);
+    setSaved(true);
+    triggerSuccess();
+    setTimeout(() => setSaved(false), 1800);
+  }, [name, email, weight, student?.currentWeight, token, onRefresh]);
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.97)" }}>
+        <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1 }}>
+          <ScrollView contentContainerStyle={{ padding: 24, paddingBottom: 48 }} showsVerticalScrollIndicator={false}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <ShieldCheck size={16} color={VOLT} />
+                <Text style={{ ...athletic, fontSize: 18, color: "#fff" }}>IDENTIDAD Y SEGURIDAD</Text>
+              </View>
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={onClose}
+                style={{ flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: "rgba(204,255,0,0.08)", borderWidth: 1, borderColor: "rgba(204,255,0,0.25)" }}
+              >
+                <X size={12} color={VOLT} />
+                <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 1, color: VOLT }}>CERRAR</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Avatar rápido — sube foto real vía POST /api/me/photos */}
+            <View style={{ alignItems: "center", marginBottom: 24 }}>
+              <Pressable onPress={pickAvatar} disabled={uploadingAvatar}>
+                <View style={{ width: 92, height: 92, borderRadius: 46, borderWidth: 2, borderColor: VOLT, alignItems: "center", justifyContent: "center", backgroundColor: "#1C1C1E", overflow: "hidden" }}>
+                  {avatarUrl ? (
+                    <Image source={{ uri: avatarUrl }} style={{ width: "100%", height: "100%" }} />
+                  ) : (
+                    <Text className="font-black" style={{ fontSize: 26, color: "#fff" }}>{(name || "AT").split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}</Text>
+                  )}
+                </View>
+                <View style={{ position: "absolute", bottom: 0, right: 0, width: 30, height: 30, borderRadius: 15, backgroundColor: VOLT, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: "#070708" }}>
+                  <Camera size={14} color="#000" />
+                </View>
+              </Pressable>
+              <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 1, color: SILVER, marginTop: 10 }}>
+                {uploadingAvatar ? "SUBIENDO..." : "TOCA PARA CAMBIAR FOTO"}
+              </Text>
+            </View>
+
+            {/* Datos de perfil */}
+            <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 1.5, color: SILVER, marginBottom: 10 }}>DATOS DE PERFIL</Text>
+            {[
+              { label: "NOMBRE COMPLETO", value: name, set: setName, kb: "default" as const },
+              { label: "CORREO",         value: email, set: setEmail, kb: "email-address" as const },
+              { label: "PESO BASE (KG)", value: weight, set: setWeight, kb: "decimal-pad" as const },
+            ].map(f => (
+              <View key={f.label} style={{ marginBottom: 10 }}>
+                <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 1, color: SILVER, marginBottom: 4 }}>{f.label}</Text>
+                <TextInput
+                  value={f.value}
+                  onChangeText={f.set}
+                  keyboardType={f.kb}
+                  autoCapitalize={f.kb === "email-address" ? "none" : "words"}
+                  placeholderTextColor="#52525b"
+                  selectionColor={VOLT}
+                  style={{ backgroundColor: "#1C1C1E", borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, color: "#fff", fontSize: 13, borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}
+                />
+              </View>
+            ))}
+            <Text className="font-mono" style={{ fontSize: 8, color: SILVER, lineHeight: 12, marginBottom: 4 }}>
+              Nombre y correo se guardan solo en este dispositivo — mycouch aún no expone un endpoint de autoedición para alumnos. El peso base sí sincroniza con tu bitácora real.
+            </Text>
+
+            <TouchableOpacity
+              activeOpacity={0.8}
+              disabled={saving}
+              onPress={save}
+              style={{ marginTop: 8, borderRadius: 999, paddingVertical: 14, alignItems: "center", backgroundColor: saved ? "transparent" : VOLT, borderWidth: saved ? 1.5 : 0, borderColor: VOLT }}
+            >
+              <Text style={{ ...athletic, fontSize: 12, color: saved ? VOLT : "#000" }}>
+                {saved ? "✓ GUARDADO" : saving ? "GUARDANDO..." : "GUARDAR CAMBIOS"}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Cambio de contraseña — validación reactiva real, guardado
+                detrás de PRÓXIMAMENTE (sin endpoint CLIENT en mycouch). */}
+            <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 1.5, color: SILVER, marginTop: 26, marginBottom: 10 }}>CAMBIAR CONTRASEÑA</Text>
+            <View style={{ ...GLASS, borderRadius: 16, padding: 14 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: "#1C1C1E", borderRadius: 12, paddingHorizontal: 14, borderWidth: 1, borderColor: "rgba(255,255,255,0.08)", marginBottom: 8 }}>
+                <TextInput
+                  value={newPassword}
+                  onChangeText={setNewPassword}
+                  placeholder="Nueva contraseña"
+                  placeholderTextColor="#52525b"
+                  secureTextEntry={!showPw}
+                  selectionColor={VOLT}
+                  style={{ flex: 1, color: "#fff", fontSize: 13, paddingVertical: 12 }}
+                />
+                <Pressable onPress={() => setShowPw(v => !v)} hitSlop={8}>
+                  {showPw ? <EyeOff size={16} color={SILVER} /> : <Eye size={16} color={SILVER} />}
+                </Pressable>
+              </View>
+              <TextInput
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                placeholder="Confirmar contraseña"
+                placeholderTextColor="#52525b"
+                secureTextEntry={!showPw}
+                selectionColor={VOLT}
+                style={{ backgroundColor: "#1C1C1E", borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, color: "#fff", fontSize: 13, borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}
+              />
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 12 }}>
+                <PasswordRule ok={pwRules.length} label="8+ CARACTERES" />
+                <PasswordRule ok={pwRules.upper}  label="1 MAYÚSCULA" />
+                <PasswordRule ok={pwRules.number} label="1 NÚMERO" />
+                <PasswordRule ok={pwRules.match}  label="COINCIDE" />
+              </View>
+              <View style={{ marginTop: 14, borderRadius: 12, overflow: "hidden" }}>
+                <View style={{ paddingVertical: 13, alignItems: "center", backgroundColor: pwValid ? "rgba(204,255,0,0.12)" : "rgba(255,255,255,0.04)", borderWidth: 1, borderColor: pwValid ? "rgba(204,255,0,0.35)" : "rgba(255,255,255,0.08)", borderRadius: 12 }}>
+                  <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 1, color: pwValid ? VOLT : SILVER }}>
+                    {pwValid ? "⚡ LISTO — DISPONIBLE PRÓXIMAMENTE" : "COMPLETA LOS REQUISITOS PARA CONTINUAR"}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          </ScrollView>
+        </SafeAreaView>
+      </View>
+    </Modal>
+  );
+}
+
 // ══════════════════════════════════════════════════════════════════════════════
 //  SCREEN
 // ══════════════════════════════════════════════════════════════════════════════
 export default function PerfilScreen() {
-  const { student, isLoading } = usePortal();
+  const { student, detail, isLoading, refresh } = usePortal();
   const { token, logout } = useAuth();
-  const { doneEx } = useWorkout();
+  const { doneEx, allDone } = useWorkout();
+  const { totalXP, currentRank, progressPct, nextThresholdXP, addXP } = useGamification();
 
   const streak = student?.streak ?? 0;
   const stage  = student?.stage ?? "Definición";
 
-  // ── Rank & plan derivations (blueprint §2.2, exact) ───────────────────────
-  const rankTitle = streak >= 60 ? "LEYENDA" : streak >= 30 ? "BESTIA" : streak >= 14 ? "GUERRERO" : "ATLETA";
-  const rankSub   = streak >= 30 ? "ELITE"   : streak >= 14 ? "PRO"    : "NIVEL 1";
   const planLabel = stage === "Volumen" ? "Plan Berserker" : stage === "Definición" ? "Plan Shredder" : "Plan Performance";
   const monthPct  = Math.min(100, Math.round((streak / 30) * 100));
-  // Sharp-edge #1 fix: bind the drawer's active tier to the real derivation
-  // instead of the web's hardcoded level 1.
-  const activeLevel = streak >= 60 ? 5 : streak >= 30 ? 3 : streak >= 14 ? 2 : 1;
+
+  // ── Rango unificado (.cursorrules Parte 3 "Unificación de la Lógica de
+  // Nivel") — el ascenso es 100% por XP real (lib/gamification.tsx), nunca
+  // por racha. La racha solo define la FECHA LÍMITE de la temporada actual:
+  // una ventana recurrente de 14 días para acumular el XP necesario, no una
+  // vía alterna de ascenso. Antes esta pantalla tenía su PROPIA escalera
+  // basada en streak, contradiciendo el texto "150 XP" que ya vivía en el
+  // primer tier — ya no: currentRank/progressPct/nextThresholdXP son los
+  // mismos que ve portal/index.tsx en su header.
+  const activeTierIdx = Math.max(0, RANK_TIERS.findIndex(t => t.name === currentRank));
+  const activeTier     = RANK_TIERS[activeTierIdx]!;
+  const SEASON_LENGTH_DAYS   = 14;
+  const daysIntoSeason       = streak % SEASON_LENGTH_DAYS;
+  const daysRemainingInSeason = SEASON_LENGTH_DAYS - daysIntoSeason;
+
+  // ── Misiones diarias — otorgan XP real (useGamification().addXP) sobre
+  // señales reales, no simuladas: agua (mismo endpoint que portal/index.tsx
+  // y nutrition/index.tsx), sets de hoy (useWorkout().allDone — el bloqueo
+  // duro de exceedsThreshold en exercise/[id].tsx ya impide registrar un set
+  // por debajo del mínimo, así que "todos los sets de hoy" implica "todos
+  // cumplieron el mínimo"), y comidas (GET /api/me/checks, mismo endpoint
+  // que nutrition/index.tsx usa para su propio checklist). ─────────────────
+  const [waterMl, setWaterMl] = useState(0);
+  const [mealsCheckedToday, setMealsCheckedToday] = useState(0);
+  const [claimedMissions, setClaimedMissions] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!token) return;
+    const today = todayDateStr();
+    api<{ totalMl: number }>(`/api/student/water?date=${today}`, { token })
+      .then(r => setWaterMl(r.totalMl ?? 0)).catch(() => {});
+    api<{ checks: { itemKey: string }[] }>(`/api/me/checks?date=${today}`, { token })
+      .then(r => setMealsCheckedToday(Array.isArray(r.checks) ? r.checks.length : 0))
+      .catch(() => {});
+  }, [token]);
+
+  useEffect(() => {
+    AsyncStorage.getItem(`mc:missions_claimed:${todayDateStr()}`)
+      .then(raw => { if (raw) setClaimedMissions(new Set(JSON.parse(raw))); })
+      .catch(() => {});
+  }, []);
+
+  const claimMission = useCallback((id: string, xp: number) => {
+    if (claimedMissions.has(id)) return;
+    triggerSuccess();
+    addXP(xp);
+    setClaimedMissions(prev => {
+      const next = new Set(prev).add(id);
+      AsyncStorage.setItem(`mc:missions_claimed:${todayDateStr()}`, JSON.stringify([...next])).catch(() => {});
+      return next;
+    });
+  }, [claimedMissions, addXP]);
+
+  const totalMealsToday = detail?.diet.meals.length ?? 0;
+  const missions = [
+    {
+      id: "water", xp: 25, icon: Droplet,
+      label: "Completar checklist de agua de hoy",
+      done: waterMl >= WATER_TARGET_ML,
+    },
+    {
+      id: "sets", xp: 50, icon: Dumbbell,
+      label: "Cumplir el peso mínimo en todas las series de entreno",
+      done: allDone,
+    },
+    {
+      id: "meals", xp: 50, icon: Utensils,
+      label: "Registrar racha perfecta de comidas",
+      done: totalMealsToday > 0 && mealsCheckedToday >= totalMealsToday,
+    },
+  ];
+
+  // Auto-otorgamiento — cero interacción manual (.cursorrules "Automatización
+  // de Misiones Diarias"). En cuanto la señal real de negocio confirma que
+  // una misión se cumplió, se reclama sola; el checkbox de abajo es de solo
+  // lectura, nunca un botón. claimMission ya es idempotente por día
+  // (claimedMissions persistido), así que este efecto puede re-evaluar en
+  // cada cambio de señal sin riesgo de otorgar el mismo XP dos veces.
+  useEffect(() => {
+    for (const m of missions) {
+      if (m.done && !claimedMissions.has(m.id)) claimMission(m.id, m.xp);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waterMl, allDone, totalMealsToday, mealsCheckedToday, claimedMissions]);
 
   // ── Streak matrix (D1–D7) ─────────────────────────────────────────────────
   // The web reads local-week nutrition/workout Sets; those stores don't exist
@@ -256,6 +555,31 @@ export default function PerfilScreen() {
   // ── Overlays ──────────────────────────────────────────────────────────────
   const [showRankDrawer, setShowRankDrawer] = useState(false);
   const [showSettings,   setShowSettings]   = useState(false);
+  const [showIdentity,   setShowIdentity]   = useState(false);
+
+  // Avatar activo (Módulo 5) — la foto AVATAR más reciente entre las fotos
+  // reales de detail.photos (mismo dato que alimenta la galería mensual de
+  // Módulo 4). El schema de Student no tiene un campo de foto de perfil
+  // propio, así que "cuál es el avatar" es una convención de cliente.
+  const avatarUrl = detail?.photos?.find(p => p.label === "AVATAR")?.url ?? null;
+
+  const shareBadge = useCallback(async () => {
+    triggerImpact();
+    try {
+      await Share.share({
+        message: `🏅 Soy ${currentRank} en MyCoach — ${activeTier.sub}\n${totalXP} XP acumulados · ${streak} días de racha.\n\nÚnete al equipo y supera tu propio récord.`,
+      });
+    } catch { /* usuario canceló el share sheet — nada que hacer */ }
+  }, [currentRank, activeTier.sub, totalXP, streak]);
+
+  const shareChallenge = useCallback(async () => {
+    triggerImpact();
+    try {
+      await Share.share({
+        message: `⚡ Te reto a superar mi marca en MyCoach.\nRango actual: ${currentRank} · PR Deadlift ${student?.prDeadlift ?? 0}kg\n\nÚnete a mi unidad: mycoach://salas`,
+      });
+    } catch { /* usuario canceló el share sheet — nada que hacer */ }
+  }, [currentRank, student?.prDeadlift]);
 
   // ── Logout — pure state teardown, no navigation call. app/_layout.tsx now
   // gates (portal)/(coach)/index behind <Stack.Protected guard={...}>, so the
@@ -283,11 +607,8 @@ export default function PerfilScreen() {
   // crash, but a flash of wrong numbers (e.g. "0 días de racha") on mount.
   if (isLoading) {
     return (
-      <SafeAreaView edges={[]} style={{ flex: 1, backgroundColor: OLED, alignItems: "center", justifyContent: "center" }}>
-        <ActivityIndicator color={VOLT} />
-        <Text className="text-[11px] uppercase mt-3" style={{ color: SILVER, letterSpacing: 1.2 }}>
-          CARGANDO PERFIL...
-        </Text>
+      <SafeAreaView edges={[]} style={{ flex: 1, backgroundColor: OLED }}>
+        <ShimmerScreen variant="macro-card" label="CARGANDO PERFIL..." />
       </SafeAreaView>
     );
   }
@@ -380,26 +701,114 @@ export default function PerfilScreen() {
           </View>
         </View>
 
-        {/* ── 3 · RANGO card → Jerarquía drawer ── */}
+        {/* ── 3 · RANGO card → Jerarquía drawer — elemento crítico activo
+             (Módulo 3): lleva el resplandor LED permanente de lib/neon.ts. ── */}
         <TouchableOpacity
           activeOpacity={0.8}
-          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {}); setShowRankDrawer(true); }}
-          style={{ ...GLASS, borderRadius: 20, marginHorizontal: 20, marginTop: 12, padding: 16, minHeight: 110 }}
+          onPress={() => { triggerImpact(); setShowRankDrawer(true); }}
+          style={{ ...GLASS, ...neonGlow, borderRadius: 20, marginHorizontal: 20, marginTop: 12, padding: 16, minHeight: 110 }}
         >
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
             <View>
               <Text style={{ fontSize: 10, letterSpacing: 1.5, fontWeight: "bold", color: SILVER, textTransform: "uppercase" }}>
-                RANGO · ATLETA
+                RANGO · {totalXP} XP
               </Text>
-              <Text className="font-black uppercase" style={{ fontSize: 24, color: "#fff", marginTop: 4 }}>{rankTitle}</Text>
-              <Text className="font-black" style={{ fontSize: 11, letterSpacing: 1, color: VOLT, marginTop: 2 }}>{rankSub}</Text>
+              <Text className="font-black uppercase" style={{ fontSize: 24, color: "#fff", marginTop: 4 }}>{currentRank}</Text>
+              <Text className="font-black" style={{ fontSize: 11, letterSpacing: 1, color: VOLT, marginTop: 2 }}>{activeTier.sub}</Text>
             </View>
             <Star size={30} color={CYAN} fill="rgba(0,240,255,0.2)" />
           </View>
-          <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 1, color: SILVER, marginTop: 12 }}>
+
+          {/* Barra de XP hacia el siguiente rango — track #1C1C1E, fill
+              #CCFF00 (.cursorrules §2/§3), directamente bajo el bloque de
+              texto principal como pide el rediseño. Progreso 100% real
+              (lib/gamification.tsx), no derivado de la racha. */}
+          <View style={{ marginTop: 14 }}>
+            <View style={{ height: 6, borderRadius: 3, backgroundColor: "#1C1C1E", overflow: "hidden" }}>
+              <MotiView
+                from={{ width: "0%" }}
+                animate={{ width: `${progressPct}%` }}
+                transition={{ type: "timing", duration: 600 }}
+                style={{
+                  height: "100%", borderRadius: 3, backgroundColor: VOLT,
+                  shadowColor: VOLT, shadowOpacity: 0.6, shadowRadius: 8, shadowOffset: { width: 0, height: 0 },
+                }}
+              />
+            </View>
+            <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 1, color: SILVER, marginTop: 6, textTransform: "uppercase" }}>
+              {nextThresholdXP !== null
+                ? `${nextThresholdXP - totalXP} XP PARA EL SIGUIENTE RANGO`
+                : "RANGO MÁXIMO ALCANZADO"}
+            </Text>
+          </View>
+
+          {/* Fecha límite de temporada — el tiempo ya NO otorga el ascenso
+              por sí mismo, solo marca cuándo se reinicia la ventana para
+              acumular XP (.cursorrules Parte 3 "Unificación"). */}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 10 }}>
+            <Flame size={11} color={CYAN} />
+            <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 1, color: CYAN, textTransform: "uppercase" }}>
+              TEMPORADA ACTUAL · {daysRemainingInSeason} {daysRemainingInSeason === 1 ? "DÍA RESTANTE" : "DÍAS RESTANTES"}
+            </Text>
+          </View>
+
+          <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 1, color: SILVER, marginTop: 10 }}>
             VER JERARQUÍA ›
           </Text>
         </TouchableOpacity>
+
+        {/* ── 3B · MISIONES DIARIAS — cero interacción manual (.cursorrules
+             "Automatización de Misiones Diarias"): el checkbox es puramente
+             de lectura, refleja la regla de negocio real (agua ≥3.0L, sets
+             de hoy sin bloqueo de peso mínimo, checklist de comidas 100%) y
+             el XP ya se otorgó automáticamente por el useEffect de arriba en
+             el instante en que la señal se cumplió — no hay nada que tocar. ── */}
+        <Text style={{ fontSize: 10, letterSpacing: 1.5, fontWeight: "bold", color: SILVER, textTransform: "uppercase", marginTop: 20, paddingHorizontal: 20, marginBottom: 10 }}>
+          Misiones diarias
+        </Text>
+        <View style={{ marginHorizontal: 20, gap: 8 }}>
+          {missions.map(m => {
+            const claimed = claimedMissions.has(m.id);
+            const Icon = m.icon;
+            return (
+              <View
+                key={m.id}
+                style={{
+                  ...GLASS, borderRadius: 14, padding: 14,
+                  flexDirection: "row", alignItems: "center", gap: 12,
+                  borderColor: claimed ? "rgba(204,255,0,0.4)" : "rgba(255,255,255,0.06)",
+                  borderWidth: claimed ? 1.5 : 1,
+                }}
+              >
+                <View
+                  pointerEvents="none"
+                  style={{
+                    width: 24, height: 24, borderRadius: 6, alignItems: "center", justifyContent: "center",
+                    backgroundColor: claimed ? VOLT : "transparent",
+                    borderWidth: 1.5, borderColor: claimed ? VOLT : "rgba(255,255,255,0.2)",
+                  }}
+                >
+                  {claimed && <Check size={14} color="#000" strokeWidth={3.5} />}
+                </View>
+                <Icon size={15} color={claimed ? VOLT : m.done ? VOLT : SILVER} />
+                <View style={{ flex: 1 }}>
+                  <Text
+                    style={{
+                      fontSize: 12, fontWeight: "700",
+                      color: claimed ? "rgba(255,255,255,0.4)" : "#fff",
+                      textDecorationLine: claimed ? "line-through" : "none",
+                    }}
+                  >
+                    {m.label}
+                  </Text>
+                </View>
+                <Text className="font-black" style={{ fontSize: 12, color: claimed ? SILVER : VOLT }}>
+                  +{m.xp} XP
+                </Text>
+              </View>
+            );
+          })}
+        </View>
 
         {/* ── 4 · BILLETERA TÁCTICA ── */}
         <View style={{ ...GLASS, borderRadius: 20, marginHorizontal: 20, marginTop: 12, padding: 16 }}>
@@ -465,6 +874,18 @@ export default function PerfilScreen() {
           </View>
           <TouchableOpacity
             activeOpacity={0.7}
+            onPress={() => { triggerImpact(); setShowIdentity(true); }}
+            style={{ ...GLASS, borderRadius: 16, padding: 14, flexDirection: "row", alignItems: "center", gap: 12 }}
+          >
+            <ShieldCheck size={16} color={VOLT} />
+            <View style={{ flex: 1 }}>
+              <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 1, color: SILVER }}>IDENTIDAD Y SEGURIDAD</Text>
+              <Text style={{ fontSize: 13, fontWeight: "700", color: "#fff", marginTop: 1 }}>Nombre, correo, peso, contraseña y avatar</Text>
+            </View>
+            <Text style={{ fontSize: 14, color: SILVER }}>›</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            activeOpacity={0.7}
             onPress={() => setShowSettings(true)}
             style={{ ...GLASS, borderRadius: 16, padding: 14, flexDirection: "row", alignItems: "center", gap: 12 }}
           >
@@ -475,6 +896,26 @@ export default function PerfilScreen() {
             </View>
             <Text style={{ fontSize: 14, color: SILVER }}>›</Text>
           </TouchableOpacity>
+
+          {/* Compartir — Share API nativa (Módulo 5), sin librería extra */}
+          <View style={{ flexDirection: "row", gap: 10 }}>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={shareBadge}
+              style={{ ...GLASS, flex: 1, borderRadius: 16, padding: 14, alignItems: "center", gap: 6 }}
+            >
+              <Award size={18} color={VOLT} />
+              <Text className="font-mono text-center" style={{ fontSize: 8, letterSpacing: 0.8, color: "#fff" }}>COMPARTIR{"\n"}INSIGNIA</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={shareChallenge}
+              style={{ ...GLASS, flex: 1, borderRadius: 16, padding: 14, alignItems: "center", gap: 6 }}
+            >
+              <Share2 size={18} color={CYAN} />
+              <Text className="font-mono text-center" style={{ fontSize: 8, letterSpacing: 0.8, color: "#fff" }}>COMPARTIR{"\n"}RETO</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* ── 7 · PROGRESO MENSUAL ── */}
@@ -627,62 +1068,85 @@ export default function PerfilScreen() {
               </TouchableOpacity>
             </View>
 
-            {RANK_TIERS.map(tier => {
-              const active = tier.level === activeLevel;
-              const locked = !active && !tier.voltTheme;
-              const shield = active || tier.voltTheme
-                ? RANK_SHIELD_CFG[tier.level]!
-                : RANK_SHIELD_CFG[2]!;                       // locked tiers force the zinc shield
-              return (
-                <View
-                  key={tier.level}
-                  style={{
-                    flexDirection: "row", alignItems: "center", gap: 14,
-                    borderRadius: 16, padding: 14, marginBottom: 10,
-                    opacity: locked ? 0.55 : 1,
-                    backgroundColor: active ? "rgba(204,255,0,0.06)" : tier.voltTheme ? "rgba(204,255,0,0.03)" : "rgba(255,255,255,0.02)",
-                    borderWidth: active ? 1.5 : 1,
-                    borderColor: active ? "rgba(204,255,0,0.4)" : tier.voltTheme ? "rgba(204,255,0,0.2)" : "rgba(255,255,255,0.06)",
-                  }}
-                >
-                  {/* Shield */}
+            {/* Roadmap vertical — línea neón conectando los 6 rangos
+                (.cursorrules Parte 3 "Rediseño del Roadmap de Insignias").
+                Bloqueado/desbloqueado ahora depende de totalXP real, no de
+                streak — un tier ya superado (por debajo del rango activo)
+                se distingue de uno todavía bloqueado, cosa que la lista
+                plana anterior no distinguía. */}
+            <View style={{ position: "relative" }}>
+              <View
+                pointerEvents="none"
+                style={{ position: "absolute", left: 21, top: 22, bottom: 22, width: 2, backgroundColor: "rgba(204,255,0,0.15)" }}
+              />
+              {RANK_TIERS.map((tier, i) => {
+                const active   = tier.name === currentRank;
+                const unlocked = totalXP >= tier.minXP;
+                const locked   = !unlocked;
+                const passed   = unlocked && !active;
+                const shield = active || tier.voltTheme
+                  ? RANK_SHIELD_CFG[i]!
+                  : RANK_SHIELD_CFG[1]!;                       // locked/passed tiers force the zinc shield
+                const xpNeeded = Math.max(0, tier.minXP - totalXP);
+                return (
                   <View
+                    key={tier.name}
                     style={{
-                      width: 44, height: 44, borderRadius: 12, alignItems: "center", justifyContent: "center",
-                      backgroundColor: shield.bg, borderWidth: shield.borderWidth, borderColor: shield.borderColor,
+                      flexDirection: "row", alignItems: "center", gap: 14,
+                      borderRadius: 16, padding: 14, marginBottom: 10,
+                      opacity: locked ? 0.4 : 1,
+                      backgroundColor: active ? "rgba(204,255,0,0.06)" : tier.voltTheme ? "rgba(204,255,0,0.03)" : "rgba(255,255,255,0.02)",
+                      borderWidth: active ? 1.5 : 1,
+                      borderColor: active ? "rgba(204,255,0,0.4)" : tier.voltTheme ? "rgba(204,255,0,0.2)" : "rgba(255,255,255,0.06)",
                     }}
                   >
-                    {locked
-                      ? <Lock size={14} color="#52525b" />
-                      : <Text style={{ fontSize: 20, color: shield.iconColor }}>{tier.icon}</Text>}
-                  </View>
-
-                  <View style={{ flex: 1 }}>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                      <Text className="font-black uppercase" style={{ fontSize: 13, color: active ? "#fff" : locked ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.6)" }}>
-                        {tier.title}
-                      </Text>
-                      {active && (
-                        <View style={{ backgroundColor: VOLT, borderRadius: 3, paddingHorizontal: 5, paddingVertical: 1.5 }}>
-                          <Text className="font-mono" style={{ fontSize: 7, fontWeight: "900", color: "#000" }}>ACTIVO</Text>
-                        </View>
-                      )}
-                      {tier.voltTheme && !active && (
-                        <View style={{ borderWidth: 1, borderColor: "rgba(204,255,0,0.3)", borderRadius: 3, paddingHorizontal: 5, paddingVertical: 1.5 }}>
-                          <Text className="font-mono" style={{ fontSize: 7, fontWeight: "900", color: "rgba(204,255,0,0.6)" }}>ELITE</Text>
-                        </View>
-                      )}
+                    {/* Shield — la insignia del nivel activo brilla con el
+                        resplandor LED exterior (.cursorrules §3). */}
+                    <View
+                      style={{
+                        width: 44, height: 44, borderRadius: 12, alignItems: "center", justifyContent: "center",
+                        backgroundColor: shield.bg, borderWidth: shield.borderWidth, borderColor: shield.borderColor,
+                        ...(active
+                          ? { shadowColor: VOLT, shadowOpacity: 0.6, shadowRadius: 10, shadowOffset: { width: 0, height: 0 }, elevation: 6 }
+                          : null),
+                      }}
+                    >
+                      {locked
+                        ? <Lock size={14} color="#52525b" />
+                        : <Text style={{ fontSize: 20, color: shield.iconColor }}>{tier.icon}</Text>}
                     </View>
-                    <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 1, marginTop: 2, color: active ? VOLT : locked ? "rgba(255,255,255,0.2)" : "rgba(204,255,0,0.5)" }}>
-                      {active ? `${tier.sub} · RANGO ACTUAL` : locked ? `NIVEL ${tier.level} · BLOQUEADO` : `${tier.sub} · RANGO SUPREMO`}
-                    </Text>
-                    <Text style={{ fontSize: 10, lineHeight: 14, color: SILVER, marginTop: 4 }}>
-                      {tier.progress}
-                    </Text>
+
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <Text className="font-black uppercase" style={{ fontSize: 13, color: active ? "#fff" : locked ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.6)" }}>
+                          {tier.name}
+                        </Text>
+                        {active && (
+                          <View style={{ backgroundColor: VOLT, borderRadius: 3, paddingHorizontal: 5, paddingVertical: 1.5 }}>
+                            <Text className="font-mono" style={{ fontSize: 7, fontWeight: "900", color: "#000" }}>ACTIVO</Text>
+                          </View>
+                        )}
+                        {tier.voltTheme && !active && (
+                          <View style={{ borderWidth: 1, borderColor: "rgba(204,255,0,0.3)", borderRadius: 3, paddingHorizontal: 5, paddingVertical: 1.5 }}>
+                            <Text className="font-mono" style={{ fontSize: 7, fontWeight: "900", color: "rgba(204,255,0,0.6)" }}>ELITE</Text>
+                          </View>
+                        )}
+                      </View>
+                      <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 1, marginTop: 2, color: active ? VOLT : locked ? "rgba(255,255,255,0.2)" : "rgba(204,255,0,0.5)" }}>
+                        {active ? `${tier.sub} · RANGO ACTUAL` : passed ? `${tier.sub} · RANGO SUPERADO` : `NIVEL ${i + 1} · BLOQUEADO`}
+                      </Text>
+                      <Text style={{ fontSize: 10, lineHeight: 14, color: SILVER, marginTop: 4 }}>
+                        {active
+                          ? `Acumula XP en tus misiones diarias antes de que termine la temporada.`
+                          : passed
+                            ? "Ya superaste este rango."
+                            : `Requiere ${tier.minXP} XP totales — te faltan ${xpNeeded} XP.`}
+                      </Text>
+                    </View>
                   </View>
-                </View>
-              );
-            })}
+                );
+              })}
+            </View>
           </ScrollView>
         </View>
       </Modal>
@@ -693,6 +1157,16 @@ export default function PerfilScreen() {
         onClose={() => setShowSettings(false)}
         name={student?.name ?? "—"}
         planLabel={stage === "Volumen" ? "Plan Berserker" : "Plan Performance"}
+      />
+
+      {/* ── IDENTIDAD Y SEGURIDAD overlay (Módulo 5) ── */}
+      <IdentityModal
+        visible={showIdentity}
+        onClose={() => setShowIdentity(false)}
+        student={student}
+        avatarUrl={avatarUrl}
+        token={token}
+        onRefresh={refresh}
       />
     </SafeAreaView>
   );

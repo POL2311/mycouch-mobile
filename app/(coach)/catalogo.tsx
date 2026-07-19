@@ -7,19 +7,23 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { router } from "expo-router";
 import { ChevronLeft, Plus, Search, Trash2, Play, X } from "lucide-react-native";
 import { useAuth } from "@/lib/session";
+import { triggerImpact } from "@/lib/haptics";
+import { ShimmerExerciseList } from "@/components/ShimmerLoader";
 import {
   fetchEjercicios, createEjercicio, deleteEjercicio, MUSCLE_GROUPS,
   type EjercicioDTO, type Equipment,
 } from "@/lib/coach";
 
-// Fondo negro absoluto, tarjetas #1C1C1E (paleta pedida para esta pantalla —
-// distinta de COACH_CARD #0F0F10 usado en el resto del panel del coach),
-// acento verde neón.
-const BG      = "#000000";
-const CARD_BG = "#1C1C1E";
-const BORDER  = "#2C2C2E";
-const VOLT    = "#CCFF00";
-const MUTED   = "#8E8E93";
+// Paleta alineada a .cursorrules §2 "Sistema de Tokens Visuales Premium":
+// fondo negro absoluto, tarjetas #0F0F10 (CARD_SURFACE), #1C1C1E reservado
+// para bordes delgados/separadores/campos de texto (CARD_BG/FIELD), acento
+// verde neón.
+const BG           = "#000000";
+const CARD_SURFACE = "#0F0F10";
+const CARD_BG      = "#1C1C1E";
+const BORDER       = "#2C2C2E";
+const VOLT         = "#CCFF00";
+const MUTED        = "#8E8E93";
 const athletic = { fontWeight: "900" as const, fontStyle: "italic" as const, textTransform: "uppercase" as const };
 
 const FIELD = {
@@ -32,7 +36,7 @@ const EQUIPMENT_OPTIONS: Equipment[] = ["Barra", "Mancuerna", "Polea", "Peso cor
 function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
   return (
     <Pressable
-      onPress={onPress}
+      onPress={() => { triggerImpact(); onPress(); }}
       style={{
         paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999,
         backgroundColor: active ? VOLT : CARD_BG, borderWidth: 1, borderColor: active ? VOLT : BORDER,
@@ -155,7 +159,7 @@ function NewExerciseModal({ visible, onClose, onCreated }: {
               {!!imageUrl.trim() && (
                 <Image
                   source={{ uri: imageUrl.trim() }}
-                  style={{ width: "100%", height: 140, borderRadius: 12, backgroundColor: CARD_BG, marginBottom: 14 }}
+                  style={{ width: "100%", height: 140, borderRadius: 12, backgroundColor: CARD_SURFACE, marginBottom: 14 }}
                   resizeMode="cover"
                 />
               )}
@@ -180,7 +184,7 @@ function NewExerciseModal({ visible, onClose, onCreated }: {
 
 function ExerciseRow({ ej, onDelete }: { ej: EjercicioDTO; onDelete: () => void }) {
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: CARD_BG, borderWidth: 1, borderColor: BORDER, borderRadius: 14, padding: 12, marginBottom: 10 }}>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: CARD_SURFACE, borderWidth: 1, borderColor: BORDER, borderRadius: 14, padding: 12, marginBottom: 10 }}>
       {ej.imageUrl ? (
         <Image source={{ uri: ej.imageUrl }} style={{ width: 48, height: 48, borderRadius: 10, backgroundColor: "#000" }} resizeMode="cover" />
       ) : (
@@ -302,7 +306,9 @@ export default function CatalogoScreen() {
       </ScrollView>
 
       {loading ? (
-        <ActivityIndicator color={VOLT} style={{ marginTop: 30 }} />
+        <View style={{ paddingHorizontal: 20, marginTop: 10 }}>
+          <ShimmerExerciseList count={6} />
+        </View>
       ) : sections.length === 0 ? (
         <View style={{ paddingHorizontal: 20, marginTop: 30, alignItems: "center" }}>
           <Text style={{ fontSize: 12, color: MUTED, textAlign: "center" }}>

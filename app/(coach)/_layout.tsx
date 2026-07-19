@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { CoachProvider } from "@/lib/coach";
+import { triggerImpact } from "@/lib/haptics";
 
 // ── Coach Portal premium dark palette ────────────────────────────────────────
 export const COACH_BG     = "#000000";
@@ -53,7 +54,7 @@ function CoachDock({ state, navigation }: BottomTabBarProps) {
 
         const handlePress = () => {
           if (focused) Haptics.selectionAsync();
-          else         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          else         triggerImpact();
 
           const event = navigation.emit({ type: "tabPress", target: route.key, canPreventDefault: true });
           if (!focused && !event.defaultPrevented) navigation.navigate(route.name, route.params);

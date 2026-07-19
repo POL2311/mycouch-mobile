@@ -1,6 +1,6 @@
 import {
   View, Text, Pressable, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Modal, StyleSheet,
-  KeyboardAvoidingView, Platform, Alert, type ViewStyle,
+  KeyboardAvoidingView, Platform, Alert, Image, type ViewStyle,
 } from "react-native";
 import type { ReactNode } from "react";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -8,33 +8,33 @@ import { router, useLocalSearchParams } from "expo-router";
 import { MotiView } from "moti";
 import { PulseButton } from "@/components/ui/PulseButton";
 import { useState, useEffect, useRef, useCallback } from "react";
-import * as Haptics from "expo-haptics";
-import { useVideoPlayer, VideoView, type VideoPlayer } from "expo-video";
+import { useEvent } from "expo";
+import { useVideoPlayer, VideoView, type VideoPlayer, type VideoPlayerStatus } from "expo-video";
 import { BlurView } from "expo-blur";
-import { Heart, Zap, Check, ChevronLeft, Settings, Dumbbell, Minus, Plus, Play, Pause } from "lucide-react-native";
+import { Heart, Zap, Check, ChevronLeft, Settings, Dumbbell, Minus, Plus, Play, Pause, VideoOff } from "lucide-react-native";
 import Svg, { Circle, Defs, LinearGradient, Stop, Rect } from "react-native-svg";
 import { useWorkout } from "@/lib/workout";
 import { useGamification } from "@/lib/gamification";
 import { usePortal } from "@/lib/portal";
 import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
+import { triggerImpact, triggerSuccess, triggerWarning } from "@/lib/haptics";
+import { ShimmerBlock } from "@/components/ShimmerLoader";
+import { metricDisplay } from "@/lib/typography";
 import { VOLT, ON_VOLT } from "@/components/workout-ui";
 import type { RoutineExercise } from "@/lib/portal";
+// serieActivaFor/exceedsThreshold viven en lib/exerciseGating.ts — un módulo
+// sin dependencias nativas pesadas, para poder testearlas sin arrastrar
+// expo-video/expo-blur/moti. Re-exportadas aquí para no tocar el resto de
+// este archivo, que sigue refiriéndose a ellas por su nombre corto.
+import { serieActivaFor, exceedsThreshold } from "@/lib/exerciseGating";
 
 type Lift = "squat" | "deadlift" | "bench";
 const LIFT_LABEL: Record<Lift, string> = {
   squat: "SENTADILLA", deadlift: "PESO MUERTO", bench: "BANCA",
 };
 
-// La serie que corresponde al set que el alumno está a punto de registrar.
-// `ex.series` solo existe para ejercicios asignados vía el constructor
-// estricto (types/coach-client.ts) — ejercicios de plantilla/legado no lo
-// traen y quedan sin exigencia (undefined). Si el alumno hace más sets de
-// los configurados, se recorta a la última serie definida.
-function serieActivaFor(ex: RoutineExercise | undefined, doneSetsForEx: number) {
-  if (!ex?.series || ex.series.length === 0) return undefined;
-  return ex.series[Math.min(doneSetsForEx, ex.series.length - 1)];
-}
+export { serieActivaFor, exceedsThreshold };
 
 // ── Pantalla 2/3 tracker tokens ──────────────────────────────────────────────
 const GOLD      = "#D4AF37";  // Récord Personal rim
@@ -137,9 +137,9 @@ function StepperCapsule({ label, value, onMinus, onPlus }: {
       <Text
         numberOfLines={1}
         adjustsFontSizeToFit
-        className="font-mono"
         style={{
-          fontSize: 64, fontWeight: "900", color: VOLT, paddingHorizontal: 10, fontVariant: ["tabular-nums"],
+          ...metricDisplay,
+          fontSize: 64, color: VOLT, paddingHorizontal: 10,
           textShadowColor: "rgba(204, 255, 0, 0.5)", textShadowRadius: 12, textShadowOffset: { width: 0, height: 0 },
         }}
       >
@@ -169,12 +169,13 @@ function StepperCapsule({ label, value, onMinus, onPlus }: {
 //  COMPONENT A — <ActiveWorkoutView /> (the tracker engine, isResting === false)
 // ═════════════════════════════════════════════════════════════════════════════
 function ActiveWorkoutView({
-  ex, videoSource, player, vidPlaying, toggleVideo, watchStatus,
+  ex, videoSource, videoStatus, player, vidPlaying, toggleVideo, watchStatus,
   exDone, doneSetsForEx, focusWeight, focusReps, bumpWeight, bumpReps,
   lift, displayPR, onOpenPR, onSetComplete, dockClear,
 }: {
   ex: RoutineExercise;
   videoSource: string | null;
+  videoStatus: VideoPlayerStatus;
   player: VideoPlayer;
   vidPlaying: boolean;
   toggleVideo: () => void;
@@ -203,7 +204,21 @@ function ActiveWorkoutView({
           marginHorizontal: GUTTER, marginTop: 16, backgroundColor: "#1E1E1E",
         }}
       >
-        {videoSource ? (
+        {!videoSource ? (
+          // Sin videoUrl asignado — placeholder estático, sin nada que cargar.
+          <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: "#1E1E1E" }} />
+        ) : videoStatus === "error" ? (
+          // El enlace existe pero falló al cargar — miniatura premium (la
+          // foto del ejercicio si el coach la cargó) en vez de una pantalla
+          // negra sin ninguna señal de qué pasó.
+          ex.imageUrl ? (
+            <Image source={{ uri: ex.imageUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+          ) : (
+            <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: "#1E1E1E", alignItems: "center", justifyContent: "center" }}>
+              <VideoOff size={26} color="rgba(255,255,255,0.3)" />
+            </View>
+          )
+        ) : videoStatus === "readyToPlay" ? (
           <VideoView
             player={player}
             style={StyleSheet.absoluteFill}
@@ -211,21 +226,26 @@ function ActiveWorkoutView({
             nativeControls={false}
           />
         ) : (
-          <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: "#1E1E1E" }} />
+          // "idle" | "loading" — el enlace es válido pero el buffer todavía
+          // no tiene frames que mostrar.
+          <ShimmerBlock style={StyleSheet.absoluteFill} />
         )}
         <VideoMask />
 
-        {/* Center translucent play controller */}
+        {/* Center translucent play controller — inerte mientras carga o si
+            el video falló, para no sugerir una acción que no hace nada. */}
         <View style={{ ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center" }}>
           <TouchableOpacity
             activeOpacity={0.7}
             onPress={toggleVideo}
+            disabled={!videoSource || videoStatus === "loading" || videoStatus === "error"}
             style={{
               width: 60, height: 60, borderRadius: 30, backgroundColor: "rgba(255, 255, 255, 0.15)",
-              justifyContent: "center", alignItems: "center", opacity: videoSource ? 1 : 0.4,
+              justifyContent: "center", alignItems: "center",
+              opacity: videoSource && videoStatus === "readyToPlay" ? 1 : 0.4,
             }}
           >
-            {vidPlaying && videoSource
+            {vidPlaying && videoSource && videoStatus === "readyToPlay"
               ? <Pause size={24} color="#fff" fill="#fff" />
               : <Play size={24} color="#fff" fill="#fff" style={{ marginLeft: 3 }} />}
           </TouchableOpacity>
@@ -394,15 +414,15 @@ function ActiveWorkoutView({
             }}
           >
             <Check size={17} color={VOLT} strokeWidth={3} />
-            <Text style={{ ...athletic, color: VOLT, fontSize: 16, letterSpacing: 1 }}>
+            <Text style={{ ...metricDisplay, color: VOLT, fontSize: 16, letterSpacing: 1 }}>
               SET COMPLETE
             </Text>
           </PulseButton>
 
           <Text
             style={{
-              fontSize: 9, letterSpacing: 2, fontWeight: "bold", color: SILVER,
-              textTransform: "uppercase", textAlign: "center", marginTop: 12,
+              ...metricDisplay, fontSize: 13, letterSpacing: 2, color: VOLT,
+              textAlign: "center", marginTop: 12,
             }}
           >
             SET {doneSetsForEx + 1} DE {ex.sets}
@@ -509,9 +529,9 @@ function RestTimerView({
             }}
           />
           <Text
-            className="font-mono"
             style={{
-              fontSize: 54, fontWeight: "700", color: VOLT, fontVariant: ["tabular-nums"],
+              ...metricDisplay,
+              fontSize: 60, color: VOLT,
               textShadowColor: "rgba(204, 255, 0, 0.4)", textShadowRadius: 8, textShadowOffset: { width: 0, height: 0 },
             }}
           >
@@ -549,11 +569,11 @@ function RestTimerView({
                 CARGA SIG.
               </Text>
             </View>
-            <Text className="font-black" style={{ fontSize: 26, color: "#fff" }}>
+            <Text style={{ ...metricDisplay, fontSize: 26, color: "#fff" }}>
               {nextWeight > 0 ? `${nextWeight}` : "—"}
-              {nextWeight > 0 && <Text style={{ fontSize: 14, color: SILVER }}> kg</Text>}
+              {nextWeight > 0 && <Text style={{ fontSize: 14, color: SILVER, fontStyle: "normal" }}> kg</Text>}
             </Text>
-            <Text style={{ fontSize: 10, color: SILVER }}>
+            <Text style={{ ...metricDisplay, fontSize: 10, color: SILVER }}>
               SET {nextSet} DE {totalSets}
             </Text>
           </GlassCard>
@@ -565,7 +585,7 @@ function RestTimerView({
             <Text style={{ fontSize: 10, letterSpacing: 1.5, fontWeight: "bold", color: MUTED, textTransform: "uppercase" }}>
               PROGRESO DE SESIÓN
             </Text>
-            <Text className="font-black" style={{ fontSize: 10, letterSpacing: 1, color: TEAL, textTransform: "uppercase" }}>
+            <Text style={{ ...metricDisplay, fontSize: 10, letterSpacing: 1, color: TEAL }}>
               SERIE {nextSet} DE {totalSets}
             </Text>
           </View>
@@ -672,12 +692,12 @@ export default function ExerciseFocusScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ex?.name]);
 
-  const bumpWeight = useCallback(async (delta: number) => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  const bumpWeight = useCallback((delta: number) => {
+    triggerImpact();
     setFocusWeight(w => Math.max(0, +(w + delta).toFixed(1)));
   }, []);
-  const bumpReps = useCallback(async (delta: number) => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  const bumpReps = useCallback((delta: number) => {
+    triggerImpact();
     setFocusReps(r => Math.max(0, r + delta));
   }, []);
 
@@ -701,7 +721,7 @@ export default function ExerciseFocusScreen() {
     if (!Number.isFinite(kg) || kg <= 0) { setPrError("VALOR INVÁLIDO"); return; }
     setPrError(null);
     setPrSaving(true);
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    triggerSuccess();
     if (kg > (currentPR ?? 0)) setOptimisticPR(kg);
     try {
       // Real contract: PATCH /api/me/prs — the Student model only carries
@@ -732,8 +752,8 @@ export default function ExerciseFocusScreen() {
     // quedan sin exigencia. Hard block: no se registra el set hasta corregir.
     const doneSetsForEx = ex ? Math.min(doneSets[idx] ?? 0, ex.sets) : 0;
     const serieActiva = serieActivaFor(ex, doneSetsForEx);
-    if (serieActiva && (weight < serieActiva.minWeight || reps < serieActiva.targetReps)) {
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+    if (serieActiva && exceedsThreshold(serieActiva, weight, reps)) {
+      triggerWarning();
       Alert.alert(
         "Serie insuficiente",
         `Tu coach exige mínimo ${serieActiva.minWeight} kg y ${serieActiva.targetReps} reps para esta serie. Ajusta los valores para continuar.`,
@@ -746,7 +766,7 @@ export default function ExerciseFocusScreen() {
     addXP(15);
     if (lift && token && weight > (currentPR ?? 0)) {
       setOptimisticPR(weight);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      triggerSuccess();
       api("/api/me/prs", { method: "PATCH", token, body: { lift, kg: weight } })
         .then(() => refresh())
         .catch(() => setOptimisticPR(null));
@@ -759,9 +779,13 @@ export default function ExerciseFocusScreen() {
   const player = useVideoPlayer(videoSource, p => {
     if (videoSource) { p.loop = true; p.muted = true; p.play(); }
   });
-  const toggleVideo = useCallback(async () => {
+  // idle/loading → ShimmerBlock, error → miniatura premium, readyToPlay →
+  // el VideoView real (ver ActiveWorkoutView). Sin esto un enlace roto o
+  // lento se veía como una pantalla negra sin ninguna señal de qué pasó.
+  const { status: videoStatus } = useEvent(player, "statusChange", { status: player.status });
+  const toggleVideo = useCallback(() => {
     if (!videoSource) return;
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    triggerImpact();
     if (vidPlaying) player.pause(); else player.play();
     setVidPlaying(v => !v);
   }, [videoSource, vidPlaying, player]);
@@ -779,9 +803,12 @@ export default function ExerciseFocusScreen() {
     if (!exDone) wasExDone.current = false;
   }, [exDone]);
 
-  // Dock clearance: the master floor dock is an 84px flat bar anchored to the
-  // viewport floor plus the device safe-area inset.
-  const DOCK_CLEAR = 84 + insets.bottom + 12;
+  // Bottom clearance for the scrollable content — the master floor dock no
+  // longer renders under this screen at all (see NO_DOCK_SCREENS in
+  // (portal)/_layout.tsx, "[id]" — a live tracker per .cursorrules), so this
+  // only needs to clear the real device safe-area inset, not the dock's own
+  // 84px height on top of it.
+  const DOCK_CLEAR = insets.bottom + 12;
 
   if (!ex) {
     return (
@@ -817,7 +844,7 @@ export default function ExerciseFocusScreen() {
         }}
       >
         <Pressable
-          onPress={async () => { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); exitToHub(); }}
+          onPress={() => { triggerImpact(); exitToHub(); }}
           hitSlop={12}
           style={{ width: 44, height: 44, alignItems: "flex-start", justifyContent: "center" }}
         >
@@ -827,7 +854,7 @@ export default function ExerciseFocusScreen() {
           MYCOACH
         </Text>
         <Pressable
-          onPress={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}
+          onPress={triggerImpact}
           hitSlop={12}
           style={{ width: 44, height: 44, alignItems: "flex-end", justifyContent: "center" }}
         >
@@ -844,14 +871,15 @@ export default function ExerciseFocusScreen() {
           nextSet={Math.min(doneSetsForEx + 1, ex.sets)}
           totalSets={ex.sets}
           overallPct={overallPct}
-          onExtend={async () => { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); extendRest(15); }}
-          onNext={async () => { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); skipRest(); }}
+          onExtend={() => { triggerImpact(); extendRest(15); }}
+          onNext={() => { triggerImpact(); skipRest(); }}
           dockClear={DOCK_CLEAR}
         />
       ) : (
         <ActiveWorkoutView
           ex={ex}
           videoSource={videoSource}
+          videoStatus={videoStatus}
           player={player}
           vidPlaying={vidPlaying}
           toggleVideo={toggleVideo}

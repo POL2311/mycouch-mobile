@@ -1,24 +1,29 @@
 import {
   View, Text, TextInput, TouchableOpacity, Pressable, ScrollView, Modal,
-  ActivityIndicator, StyleSheet, KeyboardAvoidingView, Platform, ImageBackground,
+  ActivityIndicator, StyleSheet, KeyboardAvoidingView, Platform, PanResponder, Image,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { PulseButton } from "@/components/ui/PulseButton";
+import { PhotoSlider } from "@/components/PhotoSlider";
 import * as Haptics from "expo-haptics";
-import { Scale, LayoutGrid } from "lucide-react-native";
+import * as ImagePicker from "expo-image-picker";
+import { Scale, LayoutGrid, Plus } from "lucide-react-native";
 import Svg, {
-  Path, Circle, Polygon, Line, Rect, Text as SvgText, Defs, LinearGradient, Stop,
+  Path, Circle, Polygon, Line, Text as SvgText, Defs, LinearGradient, Stop,
   Filter, FeGaussianBlur, FeMerge, FeMergeNode,
 } from "react-native-svg";
 import Animated, {
   useSharedValue, useAnimatedStyle, withDelay, withTiming, Easing,
 } from "react-native-reanimated";
 import { BlurView } from "expo-blur";
-import { usePortal } from "@/lib/portal";
+import { usePortal, uploadProgressPhoto, type PortalDetail } from "@/lib/portal";
 import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
 import { todayDateStr, useWorkout } from "@/lib/workout";
+import { triggerImpact, triggerSuccess, triggerWarning } from "@/lib/haptics";
+import { ShimmerScreen } from "@/components/ShimmerLoader";
+import { tacticalSubHeader } from "@/lib/typography";
 
 // ── Stats engine tokens ──────────────────────────────────────────────────────
 const VOLT   = "#CCFF00";
@@ -51,6 +56,43 @@ interface BodyMeasurements {
 
 // ── Chart geometry — verbatim web math (blueprint §2.1, lines 2949–2964) ────
 const PW = 320, PH = 80, PAD = 10;
+
+// ── Tooltip flotante del nodo tocado (Módulo 6) — premium, bordes neón,
+// se posiciona horizontalmente siguiendo xFraction (0–1, posición del nodo
+// en el espacio del viewBox) proyectada sobre el ancho real ya medido del
+// contenedor (containerWidth), clamped para nunca desbordar los bordes. ────
+function ChartTooltip({ xFraction, weight, date, delta, containerWidth }: {
+  xFraction: number; weight: number; date?: string; delta: number | null; containerWidth: number;
+}) {
+  const TOOLTIP_W = 132;
+  const rawLeft = xFraction * containerWidth - TOOLTIP_W / 2;
+  const left = Math.min(Math.max(rawLeft, 0), Math.max(containerWidth - TOOLTIP_W, 0));
+  const deltaColorTip = delta === null ? SILVER : delta < 0 ? VOLT : delta > 0 ? "#f87171" : SILVER;
+
+  return (
+    <View
+      pointerEvents="none"
+      style={{
+        position: "absolute", top: -6, left, width: TOOLTIP_W,
+        backgroundColor: "#1C1C1E", borderRadius: 12, borderWidth: 1, borderColor: VOLT,
+        paddingHorizontal: 10, paddingVertical: 8,
+        shadowColor: VOLT, shadowOpacity: 0.5, shadowRadius: 10, shadowOffset: { width: 0, height: 0 }, elevation: 8,
+      }}
+    >
+      <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 0.5, color: SILVER, textTransform: "uppercase" }}>
+        {date ?? "REGISTRO"}
+      </Text>
+      <Text className="font-black" style={{ fontSize: 16, color: "#fff" }}>
+        {weight}<Text style={{ fontSize: 10, color: SILVER }}> kg</Text>
+      </Text>
+      {delta !== null && (
+        <Text className="font-black" style={{ fontSize: 10, color: deltaColorTip }}>
+          {delta > 0 ? "+" : ""}{delta} kg vs. anterior
+        </Text>
+      )}
+    </View>
+  );
+}
 
 // Demo telemetry, used only while the server weight history has <2 points
 // (mirrors the web's demo-value posture; 66→55 reproduces the -11kg mock).
@@ -142,19 +184,129 @@ function GridMatrix() {
   );
 }
 
-// Bottom scrim keeping slot labels razor-sharp over photography.
-function PhotoScrim() {
+// ══════════════════════════════════════════════════════════════════════════════
+//  Módulo 4 · VER EVOLUCIÓN COMPLETA — bloques mensuales, cada uno con un
+//  resumen derivado 100% de detail.weightHistory real (nunca "eficiencia de
+//  quema" inventada) y su propia galería de fotos reales
+//  (detail.photos, subidas vía POST /api/me/photos — mismo endpoint real que
+//  ya usa el web, ahora también cableado en mobile a través de lib/portal.tsx).
+// ══════════════════════════════════════════════════════════════════════════════
+interface MonthBlock {
+  key: string;             // "2026-07"
+  label: string;           // "JULIO 2026"
+  monthNumber: number;     // 1-based, cronológico
+  netChangeKg: number | null;
+  entryCount: number;
+  photos: NonNullable<PortalDetail["photos"]>;
+}
+
+function buildMonthBlocks(weightHistory: { weight: number; date: string }[], photos: PortalDetail["photos"]): MonthBlock[] {
+  const byMonth = new Map<string, { weight: number; date: string }[]>();
+  for (const w of weightHistory) {
+    const key = w.date.slice(0, 7);
+    if (!byMonth.has(key)) byMonth.set(key, []);
+    byMonth.get(key)!.push(w);
+  }
+  const keys = [...byMonth.keys()].sort();
+  return keys.map((key, i) => {
+    const entries = byMonth.get(key)!.slice().sort((a, b) => a.date.localeCompare(b.date));
+    const net = entries.length >= 2 ? Math.round((entries[entries.length - 1]!.weight - entries[0]!.weight) * 10) / 10 : null;
+    const [y, m] = key.split("-").map(Number);
+    const label = new Date(y!, m! - 1, 1).toLocaleDateString("es-MX", { month: "long", year: "numeric" }).toUpperCase();
+    const monthPhotos = (photos ?? []).filter(p => p.createdAt.slice(0, 7) === key);
+    return { key, label, monthNumber: i + 1, netChangeKg: net, entryCount: entries.length, photos: monthPhotos };
+  }).reverse();
+}
+
+function MonthPhotoGallery({ block, uploading, onAddPhoto }: {
+  block: MonthBlock; uploading: boolean; onAddPhoto: (block: MonthBlock) => void;
+}) {
   return (
-    <Svg style={StyleSheet.absoluteFill}>
-      <Defs>
-        <LinearGradient id="photoScrim" x1="0" y1="0" x2="0" y2="1">
-          <Stop offset="0"    stopColor="#000000" stopOpacity="0" />
-          <Stop offset="0.55" stopColor="#000000" stopOpacity="0.25" />
-          <Stop offset="1"    stopColor="#000000" stopOpacity="0.92" />
-        </LinearGradient>
-      </Defs>
-      <Rect width="100%" height="100%" fill="url(#photoScrim)" />
-    </Svg>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, marginTop: 12 }}>
+      {block.photos.map(p => (
+        <Image key={p.id} source={{ uri: p.url }} style={{ width: 84, height: 84, borderRadius: 10 }} />
+      ))}
+      <TouchableOpacity
+        activeOpacity={0.75}
+        disabled={uploading}
+        onPress={() => onAddPhoto(block)}
+        style={{
+          width: 84, height: 84, borderRadius: 10, alignItems: "center", justifyContent: "center",
+          borderWidth: 1.5, borderStyle: "dashed", borderColor: "rgba(204,255,0,0.4)", backgroundColor: "rgba(204,255,0,0.04)",
+        }}
+      >
+        {uploading ? <ActivityIndicator size="small" color={VOLT} /> : <Plus size={20} color={VOLT} />}
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}
+
+function EvolutionModal({ visible, onClose, weightHistory, photos, token, onUploaded }: {
+  visible: boolean; onClose: () => void;
+  weightHistory: { weight: number; date: string }[];
+  photos: PortalDetail["photos"];
+  token: string | null;
+  onUploaded: () => void;
+}) {
+  const [uploadingKey, setUploadingKey] = useState<string | null>(null);
+  const blocks = useMemo(() => buildMonthBlocks(weightHistory, photos), [weightHistory, photos]);
+
+  const addPhoto = useCallback(async (block: MonthBlock) => {
+    if (!token) return;
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) { triggerWarning(); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.7 });
+    if (result.canceled || !result.assets[0]) return;
+    setUploadingKey(block.key);
+    const uploaded = await uploadProgressPhoto(result.assets[0].uri, `MES ${block.monthNumber}`, token);
+    setUploadingKey(null);
+    if (uploaded) { triggerSuccess(); onUploaded(); } else { triggerWarning(); }
+  }, [token, onUploaded]);
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.97)" }}>
+        <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1 }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginTop: 8, marginBottom: 16 }}>
+            <View>
+              <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 2, color: VOLT }}>BITÁCORA MENSUAL</Text>
+              <Text style={{ ...athletic, fontSize: 22, color: "#fff", marginTop: 2 }}>EVOLUCIÓN COMPLETA</Text>
+            </View>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={onClose}
+              style={{ borderWidth: 1, borderColor: VOLT, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 6 }}
+            >
+              <Text className="font-black" style={{ fontSize: 10, letterSpacing: 1, color: VOLT }}>CERRAR</Text>
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+            {blocks.length === 0 ? (
+              <View style={{ backgroundColor: "#0F0F10", borderRadius: 16, padding: 24, alignItems: "center", borderWidth: 1, borderColor: "rgba(255,255,255,0.06)" }}>
+                <Text className="font-mono text-center" style={{ fontSize: 10, color: SILVER, lineHeight: 16 }}>
+                  [ SIN HISTORIAL DE PESO REGISTRADO TODAVÍA ]
+                </Text>
+              </View>
+            ) : (
+              blocks.map(block => (
+                <View key={block.key} style={{ backgroundColor: "#0F0F10", borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.06)" }}>
+                  <Text className="font-black uppercase" style={{ fontSize: 13, color: "#fff", letterSpacing: 0.5 }}>
+                    MES {block.monthNumber} · {block.label}
+                  </Text>
+                  <Text style={{ fontSize: 12, lineHeight: 17, color: SILVER, marginTop: 6 }}>
+                    {block.netChangeKg === null
+                      ? `${block.entryCount} registro${block.entryCount === 1 ? "" : "s"} de peso este mes — aún no hay suficientes datos para calcular el neto.`
+                      : `Peso neto: ${block.netChangeKg > 0 ? "+" : ""}${block.netChangeKg}kg en el mes · ${block.entryCount} registros`}
+                  </Text>
+                  <MonthPhotoGallery block={block} uploading={uploadingKey === block.key} onAddPhoto={addPhoto} />
+                </View>
+              ))
+            )}
+          </ScrollView>
+        </SafeAreaView>
+      </View>
+    </Modal>
   );
 }
 
@@ -200,16 +352,52 @@ export default function StatsScreen() {
   const areaPath = `${linePath} L ${toX(chartWeights.length - 1).toFixed(1)},${PH - PAD} L ${toX(0).toFixed(1)},${PH - PAD} Z`;
   const latestW  = chartWeights[chartWeights.length - 1] ?? maxW;
 
+  // ── Tooltip táctil del historial de peso (Módulo 6) ───────────────────────
+  // El SVG se renderiza a width:"100%" con preserveAspectRatio="none", así
+  // que su ancho real en píxeles se mide vía onLayout (chartLayoutWidth) en
+  // vez de asumir el viewBox de 320pt — necesario para convertir la posición
+  // táctil (espacio de pantalla) al espacio de datos del gráfico.
+  const [chartLayoutWidth, setChartLayoutWidth] = useState(PW);
+  const [touchIdx, setTouchIdx] = useState<number | null>(null);
+
+  const updateTouchIdx = useCallback((locationX: number) => {
+    if (chartLayoutWidth <= 0 || chartWeights.length === 0) return;
+    const vbX = (locationX / chartLayoutWidth) * PW;
+    const raw = ((vbX - PAD) / Math.max(PW - PAD * 2, 1)) * Math.max(chartWeights.length - 1, 1);
+    const idx = Math.min(chartWeights.length - 1, Math.max(0, Math.round(raw)));
+    setTouchIdx(idx);
+  }, [chartLayoutWidth, chartWeights.length]);
+
+  // PanResponder.create() runs once inside useRef's initializer — its
+  // handlers must go through a ref indirection to always see the latest
+  // updateTouchIdx (which itself changes identity whenever chartLayoutWidth
+  // updates from the SVG's onLayout measurement), otherwise the gesture
+  // would stay bound to the very first render's stale closure forever.
+  const updateTouchIdxRef = useRef(updateTouchIdx);
+  updateTouchIdxRef.current = updateTouchIdx;
+
+  const chartPan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: evt => updateTouchIdxRef.current(evt.nativeEvent.locationX),
+      onPanResponderMove: evt => updateTouchIdxRef.current(evt.nativeEvent.locationX),
+      onPanResponderRelease: () => setTouchIdx(null),
+      onPanResponderTerminate: () => setTouchIdx(null),
+    }),
+  ).current;
+
   // ── Decorative footer tab highlight (init 2 = MIÉ, blueprint §3.2) ────────
   const [dayTab, setDayTab] = useState(2);
 
   // ── LOG DE PESO modal state machine (blueprint §3.2 / §4.2) ───────────────
   const [showWeightModal, setShowWeightModal] = useState(false);
+  const [showEvolution,   setShowEvolution]   = useState(false);
   const [weightInput,     setWeightInput]     = useState("");
   const [weightSaveState, setWeightSaveState] = useState<"idle" | "saving" | "done" | "error">("idle");
 
-  const openWeightModal = useCallback(async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  const openWeightModal = useCallback(() => {
+    triggerImpact();
     setWeightSaveState("idle");
     setWeightInput("");
     setShowWeightModal(true);
@@ -239,7 +427,7 @@ export default function StatsScreen() {
     try {
       await api("/api/me/biometrics", { method: "POST", token: token ?? undefined, body: { weight: kg, date } });
       setWeightSaveState("done");
-      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+      triggerSuccess();
       refresh().catch(() => {});                  // server truth reconciles the overlay
       setTimeout(() => {                          // modal auto-closes 900 ms after done
         setShowWeightModal(false);
@@ -308,11 +496,8 @@ export default function StatsScreen() {
   // a jarring flash of wrong numbers on every mount.
   if (isLoading) {
     return (
-      <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: OLED, alignItems: "center", justifyContent: "center" }}>
-        <ActivityIndicator color={VOLT} />
-        <Text className="text-[11px] uppercase mt-3" style={{ color: SILVER, letterSpacing: 1.2 }}>
-          CARGANDO ESTADÍSTICAS...
-        </Text>
+      <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: OLED }}>
+        <ShimmerScreen variant="macro-card" label="CARGANDO ESTADÍSTICAS..." />
       </SafeAreaView>
     );
   }
@@ -347,7 +532,7 @@ export default function StatsScreen() {
 
         {/* Verbatim branding headlines */}
         <View style={{ paddingHorizontal: 20, marginTop: 24 }}>
-          <Text className="font-mono" style={{ fontSize: 11, letterSpacing: 3, color: SILVER, textTransform: "uppercase" }}>
+          <Text style={tacticalSubHeader}>
             PERFORMANCE INTELLIGENCE
           </Text>
           <Text style={{ fontSize: 36, lineHeight: 38, letterSpacing: -1, color: "#ffffff", marginTop: 4, ...athletic }}>
@@ -396,32 +581,65 @@ export default function StatsScreen() {
           {/* Neon SVG aura engine — feGaussianBlur glow + wGrad area fill.
               overflow: visible lets the chartGlow filter's 140% region bleed
               past the exact 80px viewport instead of getting clipped flat at
-              the pixel edge (blueprint §2.1: rendered "overflow: visible"). */}
-          <Svg width="100%" height={PH} viewBox={`0 0 ${PW} ${PH}`} preserveAspectRatio="none" style={{ overflow: "visible" }}>
-            <Defs>
-              <LinearGradient id="wGrad" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0"   stopColor={VOLT} stopOpacity="0.25" />
-                <Stop offset="0.6" stopColor={VOLT} stopOpacity="0.08" />
-                <Stop offset="1"   stopColor={VOLT} stopOpacity="0" />
-              </LinearGradient>
-              <Filter id="chartGlow" x="-20%" y="-20%" width="140%" height="140%">
-                <FeGaussianBlur stdDeviation="2.5" result="coloredBlur" />
-                <FeMerge>
-                  <FeMergeNode in="coloredBlur" />
-                  <FeMergeNode in="SourceGraphic" />
-                </FeMerge>
-              </Filter>
-            </Defs>
-            <Path d={areaPath} fill="url(#wGrad)" />
-            <Path
-              d={linePath}
-              stroke={VOLT} strokeWidth={2} fill="none"
-              strokeLinecap="round" strokeLinejoin="round"
-              filter="url(#chartGlow)"
-            />
-            {/* Live end-node dot */}
-            <Circle cx={toX(chartWeights.length - 1)} cy={toY(latestW)} r={4} fill={VOLT} filter="url(#chartGlow)" />
-          </Svg>
+              the pixel edge (blueprint §2.1: rendered "overflow: visible").
+              Wrapped in a touch-tracking View (Módulo 6): el ancho real
+              renderizado del SVG (width:"100%") difiere del viewBox de 320pt
+              porque preserveAspectRatio="none" estira solo el eje X — por
+              eso se mide con onLayout en vez de asumir PW directamente. */}
+          <View
+            onLayout={e => setChartLayoutWidth(e.nativeEvent.layout.width)}
+            {...chartPan.panHandlers}
+          >
+            <Svg width="100%" height={PH} viewBox={`0 0 ${PW} ${PH}`} preserveAspectRatio="none" style={{ overflow: "visible" }}>
+              <Defs>
+                <LinearGradient id="wGrad" x1="0" y1="0" x2="0" y2="1">
+                  <Stop offset="0"   stopColor={VOLT} stopOpacity="0.25" />
+                  <Stop offset="0.6" stopColor={VOLT} stopOpacity="0.08" />
+                  <Stop offset="1"   stopColor={VOLT} stopOpacity="0" />
+                </LinearGradient>
+                <Filter id="chartGlow" x="-20%" y="-20%" width="140%" height="140%">
+                  <FeGaussianBlur stdDeviation="2.5" result="coloredBlur" />
+                  <FeMerge>
+                    <FeMergeNode in="coloredBlur" />
+                    <FeMergeNode in="SourceGraphic" />
+                  </FeMerge>
+                </Filter>
+              </Defs>
+              <Path d={areaPath} fill="url(#wGrad)" />
+              <Path
+                d={linePath}
+                stroke={VOLT} strokeWidth={2} fill="none"
+                strokeLinecap="round" strokeLinejoin="round"
+                filter="url(#chartGlow)"
+              />
+              {/* Live end-node dot */}
+              <Circle cx={toX(chartWeights.length - 1)} cy={toY(latestW)} r={4} fill={VOLT} filter="url(#chartGlow)" />
+
+              {/* Cruce táctil en vivo — nodo más cercano al dedo (Módulo 6) */}
+              {touchIdx !== null && (
+                <>
+                  <Line
+                    x1={toX(touchIdx)} x2={toX(touchIdx)} y1={PAD} y2={PH - PAD}
+                    stroke={VOLT} strokeWidth={1} strokeDasharray="3,3" opacity={0.55}
+                  />
+                  <Circle
+                    cx={toX(touchIdx)} cy={toY(chartWeights[touchIdx]!)} r={5}
+                    fill="#000000" stroke={VOLT} strokeWidth={2.5}
+                  />
+                </>
+              )}
+            </Svg>
+
+            {touchIdx !== null && (
+              <ChartTooltip
+                xFraction={toX(touchIdx) / PW}
+                weight={chartWeights[touchIdx]!}
+                date={usingFallback ? undefined : realHistory[touchIdx]?.date}
+                delta={touchIdx > 0 ? +(chartWeights[touchIdx]! - chartWeights[touchIdx - 1]!).toFixed(1) : null}
+                containerWidth={chartLayoutWidth}
+              />
+            )}
+          </View>
 
           {/* Static axis identifiers — 4-column grid, hairline dividers */}
           <View style={{ flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.06)", paddingTop: 10 }}>
@@ -671,7 +889,7 @@ export default function StatsScreen() {
             {/* Posture matrix toggle */}
             <TouchableOpacity
               activeOpacity={0.7}
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {}); setGridOn(v => !v); }}
+              onPress={() => { triggerImpact(); setGridOn(v => !v); }}
               style={{
                 width: 40, height: 40, borderRadius: 20, borderWidth: 1.5, borderColor: VOLT,
                 backgroundColor: gridOn ? VOLT : "transparent",
@@ -682,39 +900,16 @@ export default function StatsScreen() {
             </TouchableOpacity>
           </View>
 
-          <View style={{ flexDirection: "row", gap: 12, marginTop: 14 }}>
-            {[
-              { uri: PHOTO_SEEDS.before, tag: "FOTO INICIAL",  volt: false },
-              { uri: PHOTO_SEEDS.after,  tag: "ESTADO ACTUAL", volt: true  },
-            ].map(slot => (
-              <View
-                key={slot.tag}
-                style={{ flex: 1, height: 210, borderRadius: 16, overflow: "hidden", borderWidth: 1, borderColor: "rgba(255, 255, 255, 0.06)", backgroundColor: PANEL }}
-              >
-                <ImageBackground
-                  source={{ uri: slot.uri }}
-                  resizeMode="cover"
-                  imageStyle={{ opacity: 0.82 }}
-                  style={{ flex: 1, justifyContent: "flex-end" }}
-                >
-                  <PhotoScrim />
-                  {gridOn && <GridMatrix />}
-                  <View style={{ padding: 10 }}>
-                    <View
-                      style={{
-                        alignSelf: "flex-start", borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3,
-                        backgroundColor: slot.volt ? VOLT : "rgba(0,0,0,0.55)",
-                        borderWidth: slot.volt ? 0 : 1, borderColor: "rgba(255,255,255,0.2)",
-                      }}
-                    >
-                      <Text className="font-black" style={{ fontSize: 8, letterSpacing: 1, color: slot.volt ? "#000" : "#d4d4d8" }}>
-                        {slot.tag}
-                      </Text>
-                    </View>
-                  </View>
-                </ImageBackground>
+          {/* Comparador interactivo — arrastra sobre la foto para revelar la
+              transformación de izquierda a derecha (components/PhotoSlider.tsx,
+              Módulo 5). Reemplaza los dos recuadros estáticos lado a lado. */}
+          <View style={{ marginTop: 14 }}>
+            <PhotoSlider fotoAnterior={PHOTO_SEEDS.before} fotoActual={PHOTO_SEEDS.after} height={240} />
+            {gridOn && (
+              <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+                <GridMatrix />
               </View>
-            ))}
+            )}
           </View>
 
           <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 12 }}>
@@ -725,6 +920,20 @@ export default function StatsScreen() {
               PESO ACTUAL {displayKg}kg
             </Text>
           </View>
+
+          {/* Módulo 4 — bitácora mensual real (weightHistory + fotos) */}
+          <TouchableOpacity
+            activeOpacity={0.75}
+            onPress={() => { triggerImpact(); setShowEvolution(true); }}
+            style={{
+              marginTop: 16, borderRadius: 999, borderWidth: 1.5, borderColor: VOLT, paddingVertical: 13, alignItems: "center",
+              backgroundColor: "rgba(204,255,0,0.05)",
+            }}
+          >
+            <Text style={{ ...athletic, fontSize: 12, letterSpacing: 0.5, color: VOLT }}>
+              [ 🛠️ VER EVOLUCIÓN COMPLETA ]
+            </Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
 
@@ -813,6 +1022,15 @@ export default function StatsScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      <EvolutionModal
+        visible={showEvolution}
+        onClose={() => setShowEvolution(false)}
+        weightHistory={detail?.weightHistory ?? []}
+        photos={detail?.photos}
+        token={token}
+        onUploaded={refresh}
+      />
     </SafeAreaView>
   );
 }

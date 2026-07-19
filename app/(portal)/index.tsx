@@ -2,11 +2,12 @@ import {
   View, Text, ScrollView, TouchableOpacity, ActivityIndicator, ImageBackground, StyleSheet,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { router, useFocusEffect } from "expo-router";
+import { router } from "expo-router";
 import { MotiView } from "moti";
 import { useEffect, useState, useCallback, useRef } from "react";
 import { PulseButton } from "@/components/ui/PulseButton";
-import * as Haptics from "expo-haptics";
+import { NeonGlowView } from "@/components/ui/NeonGlowView";
+import { ShimmerScreen } from "@/components/ShimmerLoader";
 import { Play, Pause, Check, Moon } from "lucide-react-native";
 import { BlurView } from "expo-blur";
 import Svg, { Defs, LinearGradient, Stop, Rect } from "react-native-svg";
@@ -15,6 +16,7 @@ import { api } from "@/lib/api";
 import { useWorkout, todayDateStr } from "@/lib/workout";
 import { useGamification } from "@/lib/gamification";
 import { useMotivation } from "@/lib/motivation";
+import { triggerImpact } from "@/lib/haptics";
 import { VOLT, WATER_TARGET_ML, WATER_DOSE_ML } from "@/components/workout-ui";
 
 // ── Cinema Bento card imagery — placeholder gym stock photography keyed by
@@ -80,7 +82,7 @@ export default function WorkoutTab() {
   const {
     exercises, dayFocus, semanaLabel, totalEx, hasAssignment, isLoading,
     lifecycle, setLifecycle, watchStatus, doneSets, doneEx, biometrics,
-    workoutDone, setActiveExIdx, handleFinalizar,
+    setActiveExIdx, handleFinalizar, resetSession, syncCompletedSession,
     durationStr, allDone, sortedIndices, lifecycleLabel,
   } = useWorkout();
   const { currentRank, progressPct, nextThresholdXP, addXP, rankUpFlash, clearRankUpFlash } = useGamification();
@@ -93,16 +95,28 @@ export default function WorkoutTab() {
     return () => clearTimeout(t);
   }, [rankUpFlash, clearRankUpFlash]);
 
-  // Disparador de éxito — "guardó la última serie del día": allDone (lib/workout.tsx)
-  // se pone true en cuanto se completa el último set del último ejercicio,
-  // ANTES de que el alumno toque FINALIZAR — ese es el momento real de logro,
-  // no el botón administrativo de cerrar la sesión. Guard false→true para no
-  // repetir el modal en cada render mientras allDone se mantiene true.
+  // Disparador de éxito único — "guardó la última serie del día": allDone
+  // (lib/workout.tsx) se pone true en cuanto se completa el último set del
+  // último ejercicio. Antes esto abría el modal motivacional AQUÍ y, por
+  // separado, un botón FINALIZAR manual llevaba a workout/success.tsx (otra
+  // pantalla de éxito completa) — dos "checks" consecutivos para el mismo
+  // logro. Ahora el modal (¡Objetivo cumplido!) es la única presentación: su
+  // CONTINUAR (onDismiss) YA hace todo lo que antes hacía el botón FINALIZAR
+  // + workout/success.tsx's "Regresar al panel" — guarda la sesión, sincroniza
+  // con el servidor, otorga el bono de +100 XP y resetea el lobby — sin
+  // segunda pantalla ni botón manual de por medio.
   const prevAllDone = useRef(false);
   useEffect(() => {
-    if (allDone && !prevAllDone.current) celebrate();
+    if (allDone && !prevAllDone.current) {
+      celebrate(async () => {
+        await handleFinalizar();
+        await syncCompletedSession();
+        addXP(100);
+        resetSession();
+      });
+    }
     prevAllDone.current = allDone;
-  }, [allDone, celebrate]);
+  }, [allDone, celebrate, handleFinalizar, syncCompletedSession, addXP, resetSession]);
 
   // ── Hydration Táctica (lobby-only; independent of the exercise focus flow) ─
   const [waterMl,   setWaterMl]   = useState(0);
@@ -119,7 +133,7 @@ export default function WorkoutTab() {
 
   const addWater = useCallback(async () => {
     if (!token || waterBusy || waterMl >= WATER_TARGET_ML) return;
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    triggerImpact();
     setWaterBusy(true);
     const prev = waterMl;
     // The button is disabled once waterMl >= WATER_TARGET_ML (guard above),
@@ -143,88 +157,51 @@ export default function WorkoutTab() {
     }
   }, [token, waterBusy, waterMl, addXP]);
 
-  const openExercise = useCallback(async (idx: number) => {
+  const openExercise = useCallback((idx: number) => {
     if (lifecycle === "IDLE") return;
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    triggerImpact();
     setActiveExIdx(idx);
     router.push({ pathname: "/(portal)/exercise/[id]", params: { id: String(idx) } });
   }, [lifecycle, setActiveExIdx]);
 
-  const setPhase = useCallback(async (l: "ACTIVE_TRACKING" | "PAUSED") => {
+  const setPhase = useCallback((l: "ACTIVE_TRACKING" | "PAUSED") => {
     if (!hasAssignment) return;   // nothing assigned today — the pill is hidden, but guard the callback too
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    triggerImpact();
     setLifecycle(l);
   }, [setLifecycle, hasAssignment]);
-
-  // ── COMPLETED → hand off to the dedicated success screen (full-screen
-  // modal, escapes the persistent tab dock). useFocusEffect, not a plain
-  // useEffect: a plain effect only re-runs when workoutDone/lifecycle
-  // actually change VALUE, so returning to this tab from another tab while
-  // still stuck at a stale COMPLETED state (success.tsx dismissed some way
-  // other than "REGRESAR AL PANEL" — swiped away, backgrounded, etc., so
-  // resetSession() never ran) would never re-trigger the redirect, trapping
-  // the user on the fallback below every time they revisit this tab.
-  // useFocusEffect fires on every focus, so the redirect self-heals. Must be
-  // declared before any early return below (isLoading gate, COMPLETED
-  // fallback) — a hook called only on some renders violates the Rules of
-  // Hooks and corrupts this component's hook order on the next render. ──────
-  useFocusEffect(
-    useCallback(() => {
-      if (workoutDone && lifecycle === "COMPLETED") {
-        router.push("/(portal)/workout/success");
-      }
-    }, [workoutDone, lifecycle]),
-  );
 
   // ── Portal hydration gate — avoids flashing the "sin programación" empty
   // state during the brief window before the coach's assignment arrives. ────
   if (isLoading) {
     return (
       <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: BG }}>
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator color={VOLT} />
-          <Text className="text-[11px] uppercase mt-3" style={{ color: SILVER, letterSpacing: 1.2 }}>
-            CARGANDO PLAN...
-          </Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  // Never a dead blank view: useFocusEffect above should redirect
-  // immediately, but this is the escape hatch if that's ever delayed —
-  // "Ver resumen" always works, and resetSession() on the button inside
-  // success.tsx clears the stale COMPLETED state for good.
-  if (workoutDone && lifecycle === "COMPLETED") {
-    return (
-      <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: BG, alignItems: "center", justifyContent: "center", gap: 16 }}>
-        <ActivityIndicator color={VOLT} />
-        <Text style={{ fontSize: 12, fontWeight: "800", letterSpacing: 0.4, color: SILVER, textTransform: "uppercase" }}>
-          Abriendo resumen de sesión...
-        </Text>
-        <TouchableOpacity
-          activeOpacity={0.75}
-          onPress={() => router.push("/(portal)/workout/success")}
-          style={{ borderWidth: 1, borderColor: "rgba(255,255,255,0.15)", borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8 }}
-        >
-          <Text style={{ fontSize: 12, fontWeight: "800", letterSpacing: 0.4, color: "#fff", textTransform: "uppercase" }}>
-            Ver resumen
-          </Text>
-        </TouchableOpacity>
+        <ShimmerScreen variant="exercise-list" label="CARGANDO PLAN..." />
       </SafeAreaView>
     );
   }
 
   // ── Derived presentation state ────────────────────────────────────────────
+  // Un solo botón de acción vive en pantalla en cualquier momento dado:
+  // - lifecycle IDLE → solo la píldora superior ("INICIAR"), el latch
+  //   inferior no se monta.
+  // - lifecycle !== IDLE (ACTIVE_TRACKING/PAUSED, con o sin allDone) → solo
+  //   el latch inferior (pausar/reanudar/finalizar), la píldora superior
+  //   deja de renderizarse.
+  // Antes ambos controles vivían simultáneamente en pausa (la píldora
+  // arriba Y el latch abajo mostraban "REANUDAR ENTRENAMIENTO" a la vez) —
+  // esa es la duplicidad reportada. `hasAssignment` también gatea el latch
+  // explícitamente: sin eso, un lifecycle "PAUSED" que sobrevive de un día
+  // con rutina hasta un día de descanso (el objeto WorkoutProvider no se
+  // remonta solo porque cambió la fecha) dejaba el botón flotante visible
+  // sobre un "Día de descanso" sin ejercicios que reanudar.
   const inSession   = lifecycle === "ACTIVE_TRACKING" || lifecycle === "PAUSED";
-  const showFinal   = allDone && inSession;
-  const showLatch   = showFinal || lifecycle === "PAUSED";
+  // allDone ya dispara el modal ¡Objetivo cumplido! (ver el useEffect de
+  // arriba) a pantalla completa, que hace todo el trabajo de "finalizar" en
+  // su propio onDismiss — el latch inferior se oculta en cuanto allDone es
+  // true en vez de mostrar un botón "FINALIZAR ENTRENAMIENTO" que quedaría
+  // tapado por ese modal y nunca sería realmente tocable.
+  const showLatch   = hasAssignment && inSession && !allDone;
   const hydroActive = Math.min(HYDRO_SEGS, Math.round((waterMl / WATER_TARGET_ML) * HYDRO_SEGS));
-
-  const pillLabel = lifecycle === "IDLE" ? "INICIAR ENTRENAMIENTO"
-    : lifecycle === "PAUSED" ? "REANUDAR ENTRENAMIENTO"
-    : "PAUSAR ENTRENAMIENTO";
-  const pillColor = lifecycle === "ACTIVE_TRACKING" ? SILVER : VOLT;
 
   // ── Main render ───────────────────────────────────────────────────────────
   return (
@@ -300,26 +277,28 @@ export default function WorkoutTab() {
           </Text>
         </View>
 
-        {/* ── 2 · Upper interactive pill — INICIAR / PAUSAR / REANUDAR ──
-             Hidden entirely when the coach hasn't assigned today: there is
-             nothing to start. */}
-        {hasAssignment && (
-          <PulseButton
-            glowColor={pillColor}
-            onPress={() => setPhase(lifecycle === "ACTIVE_TRACKING" ? "PAUSED" : "ACTIVE_TRACKING")}
-            style={{
-              height: 48, borderRadius: 24, borderWidth: 1.5, borderColor: pillColor,
-              marginHorizontal: GUTTER, marginTop: 16, alignSelf: "stretch",
-              flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 8,
-            }}
-          >
-            {lifecycle === "ACTIVE_TRACKING"
-              ? <Pause size={14} color={pillColor} fill={pillColor} />
-              : <Play size={14} color={pillColor} fill={pillColor} />}
-            <Text style={{ ...athletic, fontSize: 14, color: pillColor }}>
-              {pillLabel}
-            </Text>
-          </PulseButton>
+        {/* ── 2 · Upper interactive pill — INICIAR only ──
+             Hidden once a session exists (ACTIVE_TRACKING/PAUSED) — the
+             bottom latch takes over as the single action control from that
+             point on, and hidden entirely when the coach hasn't assigned
+             today: there is nothing to start. */}
+        {hasAssignment && lifecycle === "IDLE" && (
+          <NeonGlowView style={{ marginHorizontal: GUTTER, marginTop: 16, borderRadius: 24 }}>
+            <PulseButton
+              glowColor={VOLT}
+              onPress={() => setPhase("ACTIVE_TRACKING")}
+              style={{
+                height: 48, borderRadius: 24,
+                alignSelf: "stretch",
+                flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 8,
+              }}
+            >
+              <Play size={14} color={VOLT} fill={VOLT} />
+              <Text style={{ ...athletic, fontSize: 14, color: VOLT }}>
+                INICIAR ENTRENAMIENTO
+              </Text>
+            </PulseButton>
+          </NeonGlowView>
         )}
 
         {/* Wearable pairing micro-status — shows while the telemetry scan runs */}
@@ -518,7 +497,10 @@ export default function WorkoutTab() {
         })}
       </ScrollView>
 
-      {/* ── 6 · Glowing overlay bottom latch — REANUDAR / FINALIZAR ── */}
+      {/* ── 6 · Glowing overlay bottom latch — el único control de acción
+          una vez iniciada la sesión: PAUSAR / REANUDAR / FINALIZAR. La
+          píldora superior (arriba) ya no se renderiza en ninguno de estos
+          tres estados, así que nunca coexisten dos botones de acción. ── */}
       {showLatch && (
         <MotiView
           from={{ opacity: 0, translateY: 12 }}
@@ -529,18 +511,18 @@ export default function WorkoutTab() {
         >
           <PulseButton
             glowColor={VOLT}
-            onPress={showFinal ? handleFinalizar : () => setPhase("ACTIVE_TRACKING")}
+            onPress={lifecycle === "ACTIVE_TRACKING" ? () => setPhase("PAUSED") : () => setPhase("ACTIVE_TRACKING")}
             style={{
               height: 54, borderRadius: 27, backgroundColor: LATCH_BG,
               borderWidth: 1.5, borderColor: VOLT,
               flexDirection: "row", justifyContent: "center", alignItems: "center", gap: 8,
             }}
           >
-            {showFinal
-              ? <Check size={16} color={VOLT} strokeWidth={3} />
+            {lifecycle === "ACTIVE_TRACKING"
+              ? <Pause size={16} color={VOLT} fill={VOLT} />
               : <Play size={16} color={VOLT} fill={VOLT} />}
             <Text style={{ ...athletic, fontSize: 15, color: VOLT }}>
-              {showFinal ? "FINALIZAR ENTRENAMIENTO" : "REANUDAR ENTRENAMIENTO"}
+              {lifecycle === "ACTIVE_TRACKING" ? "PAUSAR ENTRENAMIENTO" : "REANUDAR ENTRENAMIENTO"}
             </Text>
           </PulseButton>
         </MotiView>

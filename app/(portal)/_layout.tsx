@@ -8,6 +8,7 @@ import { PortalProvider } from "@/lib/portal";
 import { WorkoutProvider } from "@/lib/workout";
 import { GamificationProvider } from "@/lib/gamification";
 import { MotivationProvider } from "@/lib/motivation";
+import { triggerImpact } from "@/lib/haptics";
 import CelebrationModal from "@/components/ui/CelebrationModal";
 
 const VOLT = "#CCFF00";
@@ -22,15 +23,48 @@ const TAB_META: Record<string, { label: string; icon: IconName; iconOutline: Ico
   nutrition:      { label: "DIETA",   icon: "restaurant",  iconOutline: "restaurant-outline"  },
   "stats/index":  { label: "STATS",   icon: "stats-chart", iconOutline: "stats-chart-outline" },
   index:          { label: "WORKOUT", icon: "barbell",     iconOutline: "barbell-outline"     },
-  "salas/index":  { label: "SALAS",   icon: "people",      iconOutline: "people-outline"      },
+  salas:          { label: "SALAS",   icon: "people",      iconOutline: "people-outline"      },
   "perfil/index": { label: "PERFIL",  icon: "person",      iconOutline: "person-outline"      },
 };
+
+// Nested sub-routes that must render truly full-screen, with zero dock
+// underneath — both workout/success.tsx and nutrition/success.tsx already
+// set presentation:"fullScreenModal" on their own nested Stack.Screen, but
+// that option only governs how THAT stack transitions between ITS OWN
+// screens; it does nothing to detach the stack from the parent Tabs
+// navigator. Since LuxuryDock is a fully custom tabBar (not React
+// Navigation's stock BottomTabBar), Stack.Screen's tabBarStyle:{display:
+// 'none'} escape hatch has no effect here either — this component never
+// reads that option. The dock has to be told explicitly which nested
+// screens to disappear for.
+//
+// "[id]" (exercise/[id].tsx) joined this set per .cursorrules' explicit
+// "un tracker en vivo" clause — that screen used to just reserve bottom
+// padding (DOCK_CLEAR) to coexist with the dock instead of hiding it, which
+// is exactly the coexistence pattern the rule prohibits for this class of
+// screen, dock-height math fragility aside.
+const NO_DOCK_SCREENS = new Set(["success", "[id]"]);
 
 // ── Master floor dock — flat frame anchored to the viewport floor. The
 // ACTIVE route morphs into the floating volt sphere that breaks out of the
 // bar, while inactive slots stay flat outline glyphs.
 function LuxuryDock({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
+
+  // Salas is a fully immersive experience end-to-end (feed + chat) — the dock
+  // never coexists with it, not even on its own tab root, unlike every other
+  // tab where NO_DOCK_SCREENS only hides the dock for specific NESTED
+  // sub-routes. salas/index.tsx renders its own custom back button in place
+  // of the dock for this exact reason.
+  const focusedRoute = state.routes[state.index];
+  if (focusedRoute?.name === "salas") return null;
+
+  // Look one level down into the focused tab's own nested navigator (if it
+  // has one) to find which sub-screen is actually on screen right now.
+  const nestedState   = focusedRoute?.state;
+  const nestedIdx     = nestedState?.index ?? (nestedState ? nestedState.routes.length - 1 : -1);
+  const nestedRouteName = nestedState?.routes[nestedIdx]?.name;
+  if (nestedRouteName && NO_DOCK_SCREENS.has(nestedRouteName)) return null;
 
   return (
     <View
@@ -53,7 +87,7 @@ function LuxuryDock({ state, navigation }: BottomTabBarProps) {
           // Tactile layer: selection tick on the active sphere, light impact
           // on the side tabs.
           if (focused) Haptics.selectionAsync();
-          else         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          else         triggerImpact();
 
           const event = navigation.emit({
             type: "tabPress",
@@ -138,7 +172,7 @@ export default function PortalLayout() {
           <Tabs.Screen name="nutrition" />
           <Tabs.Screen name="stats/index" />
           <Tabs.Screen name="index" />
-          <Tabs.Screen name="salas/index" />
+          <Tabs.Screen name="salas" />
           <Tabs.Screen name="perfil/index" />
           {/* Hidden routes — pushed from their respective flows, off the dock */}
           <Tabs.Screen name="exercise" options={{ href: null }} />

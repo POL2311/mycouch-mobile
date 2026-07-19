@@ -115,6 +115,11 @@ export interface PortalDetail {
   };
   weightHistory:  { weight: number; date: string }[];
   measurements:   { date: string; weight: number }[];
+  // Galería de progreso real (Módulo 4 "Ver Evolución Completa") — viene del
+  // mismo GET /api/students/[id] sin recortar que ya usa fetchFullAssignment
+  // para diet/routine (a diferencia de /api/mobile/portal, que sí recorta
+  // campos). Se sube vía POST /api/me/photos (real, sin cambios de backend).
+  photos?: { id: string; url: string; label: string; weight: number | null; createdAt: string }[];
 }
 
 // Mirrors resolveRoutineDay() in lib/workout.tsx: explicit dayIndex pin wins
@@ -155,14 +160,15 @@ const PortalContext = createContext<PortalState | null>(null);
 // just means the caller keeps whatever it already had.
 async function fetchFullAssignment(
   studentId: string, token: string,
-): Promise<{ diet: PortalDetail["diet"]; routine: PortalDetail["routine"] } | null> {
+): Promise<{ diet: PortalDetail["diet"]; routine: PortalDetail["routine"]; photos: PortalDetail["photos"] } | null> {
   try {
-    const res = await api<{ detail?: { diet?: unknown; routine?: unknown } }>(
+    const res = await api<{ detail?: { diet?: unknown; routine?: unknown; photos?: PortalDetail["photos"] } }>(
       `/api/students/${studentId}`, { token },
     );
     return {
       diet: dietaJsonToPortalDiet(parseDietaJson(res.detail?.diet)),
       routine: routineJsonToPortalRoutine(parseRoutineJson(res.detail?.routine)),
+      photos: res.detail?.photos ?? [],
     };
   } catch {
     return null;
@@ -184,7 +190,7 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       );
       setStudent(d.student);
       const full = await fetchFullAssignment(d.student.id, token);
-      setDetail(full ? { ...d.detail, diet: full.diet, routine: full.routine } : d.detail);
+      setDetail(full ? { ...d.detail, diet: full.diet, routine: full.routine, photos: full.photos } : d.detail);
     } catch {
       // Silently tolerate network failures — screens handle null state
     } finally {
@@ -234,5 +240,65 @@ export async function fetchMotivationalPhrases(token: string): Promise<string[]>
       .filter(Boolean);
   } catch {
     return [];
+  }
+}
+
+// ── Community "sindicato" join — POST /api/community/join ───────────────────
+// Extraído verbatim de app/(portal)/salas/index.tsx's executeJoin() para que
+// sea testeable sin montar la pantalla completa de Salas (que depende de
+// expo-blur, moti, y varios providers anidados). Deliberadamente usa fetch
+// crudo en vez de lib/api.ts's api() — ese helper lanza ApiError con un
+// mensaje formateado distinto al shape { error } que este endpoint devuelve,
+// y la UI de Salas ya está escrita contra ese shape original; cambiarlo
+// habría alterado el copy de error mostrado al alumno.
+const PORTAL_BASE_URL: string = process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000";
+
+export interface CommunityNotice { id: string; senderName: string; role: string; content: string; createdAt: string }
+
+export interface CommunityJoinResult {
+  ok: boolean;
+  error?: string;
+  coachName?: string;
+  notices?: CommunityNotice[];
+}
+
+// ── Progress photo upload — POST /api/me/photos (real, no backend changes;
+// see NSPhotoLibraryUsageDescription in app.json). Used by Módulo 4's
+// monthly evolution gallery. Raw fetch + FormData like joinCommunityRoom
+// above — api()'s JSON Content-Type would break the multipart boundary.
+export async function uploadProgressPhoto(uri: string, label: string, token: string): Promise<{ url: string; label: string; createdAt: string } | null> {
+  try {
+    const formData = new FormData();
+    const ext = uri.split(".").pop()?.toLowerCase() ?? "jpg";
+    const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+    // React Native's FormData accepts this { uri, name, type } shape natively
+    // — it is not a real web File/Blob, hence the cast.
+    formData.append("file", { uri, name: `photo.${ext}`, type: mime } as unknown as Blob);
+    formData.append("label", label);
+    const res = await fetch(`${PORTAL_BASE_URL}/api/me/photos`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function joinCommunityRoom(payload: { code?: string; roomId?: string }, token: string | null): Promise<CommunityJoinResult> {
+  try {
+    const res = await fetch(`${PORTAL_BASE_URL}/api/community/join`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    });
+    const data = (await res.json()) as { error?: string; coachName?: string; coachId?: string; notices?: CommunityNotice[] };
+    return res.ok
+      ? { ok: true, coachName: data.coachName, notices: data.notices ?? [] }
+      : { ok: false, error: data?.error ?? "ERROR_DESCONOCIDO" };
+  } catch {
+    return { ok: false, error: "SIN_CONEXIÓN" };
   }
 }

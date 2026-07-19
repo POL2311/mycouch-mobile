@@ -1,13 +1,12 @@
 import {
   View, Text, TextInput, TouchableOpacity, Pressable, ScrollView, Modal, ActivityIndicator,
+  KeyboardAvoidingView, Platform,
 } from "react-native";
 import { useState, useEffect, useCallback } from "react";
 import { X } from "lucide-react-native";
 import { useAuth } from "@/lib/session";
-import {
-  STAGES, fetchTemplates, changeStage,
-  type Stage, type StoredDietTemplate, type StoredRoutineTemplate,
-} from "@/lib/coach";
+import { STAGES, changeStage, type Stage } from "@/lib/coach";
+import { triggerImpact, triggerSuccess } from "@/lib/haptics";
 
 const VOLT   = "#CCFF00";
 const SILVER = "#8e8e93";
@@ -46,14 +45,8 @@ export default function ChangeStageModal({ visible, studentIds, onClose, onAppli
 
   const [stage,       setStage]       = useState<Stage>(initialStage ?? "Volumen");
   const [stageNumber, setStageNumber] = useState(String(initialStageNumber ?? 1));
-  const [dietTemplateId,    setDietTemplateId]    = useState("");
-  const [routineTemplateId, setRoutineTemplateId] = useState("");
   const [timing,       setTiming]       = useState<"immediate" | "scheduled">("immediate");
   const [executionDate, setExecutionDate] = useState(plusDays(10));
-
-  const [dietTemplates,    setDietTemplates]    = useState<StoredDietTemplate[]>([]);
-  const [routineTemplates, setRoutineTemplates] = useState<StoredRoutineTemplate[]>([]);
-  const [templatesLoading, setTemplatesLoading] = useState(true);
 
   const [saving, setSaving] = useState(false);
   const [error,  setError]  = useState<string | null>(null);
@@ -63,29 +56,22 @@ export default function ChangeStageModal({ visible, studentIds, onClose, onAppli
     if (!visible) return;
     setStage(initialStage ?? "Volumen");
     setStageNumber(String(initialStageNumber ?? 1));
-    setDietTemplateId("");
-    setRoutineTemplateId("");
     setTiming("immediate");
     setExecutionDate(plusDays(10));
     setError(null);
   }, [visible, initialStage, initialStageNumber]);
 
-  useEffect(() => {
-    if (!visible || !token) return;
-    setTemplatesLoading(true);
-    Promise.all([fetchTemplates("diet", token), fetchTemplates("routine", token)])
-      .then(([diets, routines]) => {
-        setDietTemplates(diets.filter((t): t is StoredDietTemplate => t.type === "diet"));
-        setRoutineTemplates(routines.filter((t): t is StoredRoutineTemplate => t.type === "routine"));
-      })
-      .catch(() => { setDietTemplates([]); setRoutineTemplates([]); })
-      .finally(() => setTemplatesLoading(false));
-  }, [visible, token]);
-
+  // Asignación de plantillas de dieta/rutina ya NO vive aquí — este modal es
+  // deliberadamente el "asignador rápido de un solo paso" (ver comentario en
+  // alumnos.tsx junto a BulkPeriodizationWizard, que sí conserva su propio
+  // selector de plantillas independiente para el flujo de 3 pasos). Tener
+  // listados completos de plantillas incrustados aquí saturaba una acción
+  // que debería ser minimalista: solo etapa + número + cuándo.
   const submit = useCallback(async () => {
     if (!token) return;
     const n = parseInt(stageNumber, 10) || 1;
     if (timing === "scheduled" && !executionDate.trim()) { setError("La fecha de ejecución es obligatoria para programar."); return; }
+    triggerImpact();
     setSaving(true);
     setError(null);
     try {
@@ -93,10 +79,9 @@ export default function ChangeStageModal({ visible, studentIds, onClose, onAppli
         studentIds,
         stage,
         stageNumber: Math.max(1, n),
-        dietTemplateId: dietTemplateId || undefined,
-        routineTemplateId: routineTemplateId || undefined,
         executionDate: timing === "scheduled" ? executionDate.trim() : undefined,
       }, token);
+      triggerSuccess();
       onApplied();
       onClose();
     } catch {
@@ -104,13 +89,19 @@ export default function ChangeStageModal({ visible, studentIds, onClose, onAppli
     } finally {
       setSaving(false);
     }
-  }, [token, stage, stageNumber, dietTemplateId, routineTemplateId, timing, executionDate, studentIds, onApplied, onClose]);
+  }, [token, stage, stageNumber, timing, executionDate, studentIds, onApplied, onClose]);
 
   const title = studentIds.length === 1 ? "Cambiar Etapa del Alumno" : `Cambiar Etapa de Alumnos (${studentIds.length})`;
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.95)", paddingTop: 70 }}>
+      {/* KeyboardAvoidingView (.cursorrules §1): "Número de Etapa" y "Fecha de
+          Ejecución" son campos de texto reales, y los botones de acción están
+          fijos en bottom:24 — sin esto ambos quedaban tapados por el teclado. */}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.95)", paddingTop: 70 }}
+      >
         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", paddingHorizontal: 20, marginBottom: 6 }}>
           <View style={{ flex: 1, paddingRight: 12 }}>
             <Text style={{ ...athletic, fontSize: 18, color: "#fff" }}>{title}</Text>
@@ -120,10 +111,10 @@ export default function ChangeStageModal({ visible, studentIds, onClose, onAppli
           </TouchableOpacity>
         </View>
         <Text style={{ fontSize: 12, color: SILVER, paddingHorizontal: 20, marginBottom: 20, lineHeight: 17 }}>
-          Define los nuevos objetivos, planes de dieta/rutina y cuándo ejecutarlos.
+          Define la nueva etapa, el número de mes y cuándo debe aplicarse.
         </Text>
 
-        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
+        <ScrollView bounces={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 120 }} showsVerticalScrollIndicator={false}>
           {/* Nueva Etapa */}
           <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: SILVER, marginBottom: 8 }}>Nueva Etapa</Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 18 }}>
@@ -155,64 +146,6 @@ export default function ChangeStageModal({ visible, studentIds, onClose, onAppli
             keyboardType="number-pad"
             style={{ ...GLASS, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10, color: "#fff", fontSize: 14, marginBottom: 18, width: 100 }}
           />
-
-          {/* Asignar Plantilla de Dieta */}
-          <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: SILVER, marginBottom: 8 }}>
-            Asignar Plantilla de Dieta (Opcional)
-          </Text>
-          {templatesLoading ? (
-            <ActivityIndicator color={VOLT} style={{ marginBottom: 18 }} />
-          ) : (
-            <View style={{ marginBottom: 18, gap: 6 }}>
-              <Pressable
-                onPress={() => setDietTemplateId("")}
-                style={{ ...GLASS, borderRadius: 10, padding: 10, borderColor: dietTemplateId === "" ? VOLT : GLASS.borderColor }}
-              >
-                <Text style={{ fontSize: 12, color: dietTemplateId === "" ? VOLT : "#d4d4d8" }}>
-                  Mantener dieta actual o sin cambios
-                </Text>
-              </Pressable>
-              {dietTemplates.map(t => (
-                <Pressable
-                  key={t.id}
-                  onPress={() => setDietTemplateId(t.id)}
-                  style={{ ...GLASS, borderRadius: 10, padding: 10, borderColor: dietTemplateId === t.id ? VOLT : GLASS.borderColor }}
-                >
-                  <Text style={{ fontSize: 12, color: dietTemplateId === t.id ? VOLT : "#d4d4d8" }}>
-                    {t.name} ({t.totalCalories} kcal)
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          )}
-
-          {/* Asignar Plantilla de Rutina */}
-          <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: SILVER, marginBottom: 8 }}>
-            Asignar Plantilla de Rutina (Opcional)
-          </Text>
-          {!templatesLoading && (
-            <View style={{ marginBottom: 18, gap: 6 }}>
-              <Pressable
-                onPress={() => setRoutineTemplateId("")}
-                style={{ ...GLASS, borderRadius: 10, padding: 10, borderColor: routineTemplateId === "" ? VOLT : GLASS.borderColor }}
-              >
-                <Text style={{ fontSize: 12, color: routineTemplateId === "" ? VOLT : "#d4d4d8" }}>
-                  Mantener rutina actual o sin cambios
-                </Text>
-              </Pressable>
-              {routineTemplates.map(t => (
-                <Pressable
-                  key={t.id}
-                  onPress={() => setRoutineTemplateId(t.id)}
-                  style={{ ...GLASS, borderRadius: 10, padding: 10, borderColor: routineTemplateId === t.id ? VOLT : GLASS.borderColor }}
-                >
-                  <Text style={{ fontSize: 12, color: routineTemplateId === t.id ? VOLT : "#d4d4d8" }}>
-                    {t.name} ({t.daysPerWeek} días/sem)
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          )}
 
           {/* Timing */}
           <Text style={{ fontSize: 10, letterSpacing: 1, fontWeight: "bold", color: SILVER, marginBottom: 8 }}>
@@ -273,7 +206,7 @@ export default function ChangeStageModal({ visible, studentIds, onClose, onAppli
             </Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
