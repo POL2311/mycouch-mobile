@@ -3,6 +3,7 @@ import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
 import {
   parseDietaJson, parseRoutineJson, dietaJsonToPortalDiet, routineJsonToPortalRoutine,
+  dietaEstaVacia, rutinaEstaVacia,
   type NumeroSemana,
 } from "@/types/coach-client";
 
@@ -77,6 +78,19 @@ export interface Student {
   prSquat:       number;
   prDeadlift:    number;
   prBench:       number;
+  // Real field, already returned by toStudent() in mycouch's db.ts (never
+  // stripped) — just not previously declared on mobile's Student type.
+  // null/undefined = no coach linked (Módulo 2 "Modo Auto-Entrenador").
+  coachId?:      string | null;
+}
+
+// isSelfCoached se deriva de coachId real — mycouch no tiene (ni puede
+// ganar, dado que no editamos ese repo) un campo Student.isSelfCoached
+// propio; Student.coachId YA es opcional en el schema (`coachId String?`),
+// así que "sin coach" es una condición 100% real y ya representable, solo
+// hacía falta exponerla y nombrarla en el cliente.
+export function isSelfCoached(student: Student | null | undefined): boolean {
+  return !student?.coachId;
 }
 
 // Per-day diet override — client-side mirror of DietDayAuth (lib/coach.tsx),
@@ -120,6 +134,15 @@ export interface PortalDetail {
   // para diet/routine (a diferencia de /api/mobile/portal, que sí recorta
   // campos). Se sube vía POST /api/me/photos (real, sin cambios de backend).
   photos?: { id: string; url: string; label: string; weight: number | null; createdAt: string }[];
+  // Asignaciones asimétricas (Módulo 3) — computados en fetchFullAssignment()
+  // ANTES del bridge a la forma de UI (dietaEstaVacia/rutinaEstaVacia operan
+  // sobre el DietaJson/RoutineJson crudo, types/coach-client.ts). El bridge
+  // siempre produce un objeto `diet`/`routine` válido con 0 kcal y arrays
+  // vacíos cuando el coach nunca asignó nada — sin esta bandera, la UI no
+  // podía distinguir "el coach asignó un plan de 0 kcal" (no ocurre en la
+  // práctica, pero no hay forma de afirmarlo) de "nunca hubo plan".
+  dietAssigned:    boolean;
+  routineAssigned: boolean;
 }
 
 // Mirrors resolveRoutineDay() in lib/workout.tsx: explicit dayIndex pin wins
@@ -160,15 +183,22 @@ const PortalContext = createContext<PortalState | null>(null);
 // just means the caller keeps whatever it already had.
 async function fetchFullAssignment(
   studentId: string, token: string,
-): Promise<{ diet: PortalDetail["diet"]; routine: PortalDetail["routine"]; photos: PortalDetail["photos"] } | null> {
+): Promise<{
+  diet: PortalDetail["diet"]; routine: PortalDetail["routine"]; photos: PortalDetail["photos"];
+  dietAssigned: boolean; routineAssigned: boolean;
+} | null> {
   try {
     const res = await api<{ detail?: { diet?: unknown; routine?: unknown; photos?: PortalDetail["photos"] } }>(
       `/api/students/${studentId}`, { token },
     );
+    const dietaJson   = parseDietaJson(res.detail?.diet);
+    const routineJson = parseRoutineJson(res.detail?.routine);
     return {
-      diet: dietaJsonToPortalDiet(parseDietaJson(res.detail?.diet)),
-      routine: routineJsonToPortalRoutine(parseRoutineJson(res.detail?.routine)),
+      diet: dietaJsonToPortalDiet(dietaJson),
+      routine: routineJsonToPortalRoutine(routineJson),
       photos: res.detail?.photos ?? [],
+      dietAssigned: !dietaEstaVacia(dietaJson),
+      routineAssigned: !rutinaEstaVacia(routineJson),
     };
   } catch {
     return null;
@@ -190,7 +220,12 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
       );
       setStudent(d.student);
       const full = await fetchFullAssignment(d.student.id, token);
-      setDetail(full ? { ...d.detail, diet: full.diet, routine: full.routine, photos: full.photos } : d.detail);
+      setDetail(full
+        ? { ...d.detail, diet: full.diet, routine: full.routine, photos: full.photos, dietAssigned: full.dietAssigned, routineAssigned: full.routineAssigned }
+        // fetchFullAssignment failed (network hiccup) — fall back to the
+        // stripped /api/mobile/portal payload's own meals/days presence
+        // rather than leaving dietAssigned/routineAssigned undefined.
+        : { ...d.detail, dietAssigned: (d.detail.diet?.meals?.length ?? 0) > 0, routineAssigned: (d.detail.routine?.days?.length ?? 0) > 0 });
     } catch {
       // Silently tolerate network failures — screens handle null state
     } finally {

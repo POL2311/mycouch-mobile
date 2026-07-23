@@ -1,8 +1,8 @@
 import {
   View, Text, TextInput, TouchableOpacity, Pressable, ScrollView, ActivityIndicator,
-  ImageBackground, Modal, StyleSheet, Image,
+  ImageBackground, Modal, StyleSheet, Image, KeyboardAvoidingView, Platform,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MotiView } from "moti";
 import { BlurView } from "expo-blur";
 import { PulseButton } from "@/components/ui/PulseButton";
@@ -736,26 +736,34 @@ function PostCreatorModal({ visible, onClose, onSubmit, telemetryCards }: {
     { id: "TELEMETRY",  label: "⚡ Inyectar Telemetría/Logros", Icon: Award },
   ];
 
+  const insets = useSafeAreaInsets();
+
   return (
     <Modal visible={visible} transparent={false} animationType="slide" onRequestClose={close}>
-      <View style={{ flex: 1, backgroundColor: "#000000" }}>
-        <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1 }}>
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-              <Text style={{ ...athletic, fontSize: 18, color: "#fff" }}>NUEVA PUBLICACIÓN</Text>
-              <TouchableOpacity
-                activeOpacity={0.7}
-                onPress={close}
-                style={{
-                  flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6,
-                  backgroundColor: "rgba(204,255,0,0.08)", borderWidth: 1, borderColor: "rgba(204,255,0,0.25)",
-                }}
-              >
-                <XIcon size={12} color={VOLT} />
-                <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 1, color: VOLT }}>CERRAR</Text>
-              </TouchableOpacity>
-            </View>
+      {/* Responsive fix: KeyboardAvoidingView + insets explícitos (en vez de
+          confiar solo en SafeAreaView, que dentro de un <Modal> no siempre
+          resuelve los insets de forma consistente en Android) — el botón
+          CERRAR y PUBLICAR ya no quedan inalcanzables al abrir el teclado ni
+          en pantallas angostas. */}
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={0}>
+        <View style={{ flex: 1, backgroundColor: "#000000", paddingTop: insets.top + 12, paddingBottom: insets.bottom }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginBottom: 20 }}>
+            <Text style={{ ...athletic, fontSize: 18, color: "#fff" }}>NUEVA PUBLICACIÓN</Text>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={close}
+              hitSlop={10}
+              style={{
+                flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6,
+                backgroundColor: "rgba(204,255,0,0.08)", borderWidth: 1, borderColor: "rgba(204,255,0,0.25)",
+              }}
+            >
+              <XIcon size={12} color={VOLT} />
+              <Text style={{ ...tacticalSubHeader, fontSize: 8, letterSpacing: 1 }}>CERRAR</Text>
+            </TouchableOpacity>
+          </View>
 
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingBottom: 20 }}>
             <TextInput
               value={text}
               onChangeText={setText}
@@ -797,7 +805,7 @@ function PostCreatorModal({ visible, onClose, onSubmit, telemetryCards }: {
             {mode === "TELEMETRY" && <TelemetryCapture cards={telemetryCards} selected={telemetry} onSelect={setTelemetry} />}
           </ScrollView>
 
-          <View style={{ paddingHorizontal: 20, paddingBottom: 8 }}>
+          <View style={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 8 }}>
             <TouchableOpacity
               activeOpacity={0.8}
               disabled={!canPublish}
@@ -810,8 +818,8 @@ function PostCreatorModal({ visible, onClose, onSubmit, telemetryCards }: {
               <Text style={{ ...athletic, fontSize: 13, color: canPublish ? "#000" : SILVER }}>PUBLICAR</Text>
             </TouchableOpacity>
           </View>
-        </SafeAreaView>
-      </View>
+        </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -1483,6 +1491,7 @@ function RetosTab({
 // ── D · ROSTER ────────────────────────────────────────────────────────────────
 function RosterTab({ onSendChallenge }: { onSendChallenge: (name: string) => void }) {
   const [profile, setProfile] = useState<RosterMember | null>(null);
+  const insets = useSafeAreaInsets();
 
   return (
     <View style={{ paddingHorizontal: 20 }}>
@@ -1560,7 +1569,7 @@ function RosterTab({ onSendChallenge }: { onSendChallenge: (name: string) => voi
 
       {/* ── Elite athlete profile overlay ── */}
       <Modal visible={profile !== null} transparent animationType="slide" onRequestClose={() => setProfile(null)}>
-        <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.95)", padding: 24, paddingTop: 70 }}>
+        <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.95)", padding: 24, paddingTop: insets.top + 24 }}>
           {profile && (
             <>
               <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>

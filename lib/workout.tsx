@@ -3,6 +3,7 @@ import { AppState, type AppStateStatus } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { usePortal } from "@/lib/portal";
+import { useSelfCoach } from "@/lib/selfCoach";
 import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
 import { triggerImpact, triggerSuccess } from "@/lib/haptics";
@@ -78,6 +79,14 @@ interface WorkoutState {
   semanaLabel:    string;
   totalEx:        number;
   hasAssignment:  boolean;
+  // Módulo 3 — true si HAY una rutina (real del coach o auto-elegida por un
+  // alumno self-coached), sin importar si hoy específicamente es descanso.
+  // false solo cuando nunca existió ninguna rutina — la señal exacta para
+  // distinguir "descanso programado" de "el coach solo asignó dieta".
+  hasAnyRoutine:  boolean;
+  // true cuando la rutina activa viene de una plantilla elegida localmente
+  // (Módulo 2), no de una asignación real del coach.
+  isSelfPlan:     boolean;
   // Portal hydration passthrough — lets consumers distinguish "still fetching
   // the coach's assignment" from "fetched, and today is genuinely unassigned"
   // instead of flashing the empty-state banner during initial load.
@@ -136,8 +145,25 @@ const WorkoutContext = createContext<WorkoutState | null>(null);
 export function WorkoutProvider({ children }: { children: React.ReactNode }) {
   const { detail, isLoading: portalLoading } = usePortal();
   const { token } = useAuth();
+  const { localRoutineBridge } = useSelfCoach();
 
-  const routineDays = detail?.routine?.days ?? [];
+  // Módulo 2 "Auto-Entrenador" — cuando el coach nunca asignó una rutina
+  // real (detail.routineAssigned === false), un alumno sin coach puede
+  // haber elegido una plantilla del catálogo (lib/selfCoach.tsx); esa
+  // elección alimenta EXACTAMENTE el mismo pipeline real de sets/XP/sync que
+  // una rutina de coach — solo cambia de dónde viene `routine`, nunca cómo
+  // se registra el progreso. Un plan local jamás pisa una asignación real.
+  const routineAssigned = detail?.routineAssigned ?? (detail?.routine?.days?.length ?? 0) > 0;
+  const isSelfPlan = !routineAssigned && !!localRoutineBridge;
+  const effectiveRoutine = routineAssigned ? detail?.routine : (isSelfPlan ? localRoutineBridge : detail?.routine);
+  // Módulo 3 — distingue "nunca hubo rutina" (ni real ni auto-elegida) de
+  // "hay rutina pero hoy es descanso" (routineAssigned/isSelfPlan true,
+  // hasAssignment false más abajo) — la pantalla de Workout necesita ambas
+  // señales para no confundir un día de descanso legítimo con "solo tienes
+  // dieta asignada".
+  const hasAnyRoutine = routineAssigned || isSelfPlan;
+
+  const routineDays = effectiveRoutine?.days ?? [];
   const todayDay    = resolveRoutineDay(routineDays);
   // No mock backfill: an unresolved day or an empty exercises[] both mean the
   // coach has not assigned programming for today — totalEx===0 downstream
@@ -155,12 +181,12 @@ export function WorkoutProvider({ children }: { children: React.ReactNode }) {
   const exercises: RoutineExercise[] =
     todayDay?.exercises ?? (__DEV__ ? DEV_MOCK_ROUTINE : []);
   const hasAssignment = exercises.length > 0;
-  const routineName = detail?.routine?.name ?? "RUTINA DE ENTRENAMIENTO";
+  const routineName = effectiveRoutine?.name ?? "RUTINA DE ENTRENAMIENTO";
   const dayLabel    = todayDay?.label ?? "SIN ASIGNAR";
   // Blueprint §1.1: the lobby's H1 is the day's overall muscle focus, not the
   // routine name — "SIN PROGRAMACIÓN" when the coach hasn't assigned today.
   const dayFocus    = todayDay?.focus ?? "SIN PROGRAMACIÓN";
-  const semanaActual = detail?.routine?.semanaActual;
+  const semanaActual = effectiveRoutine?.semanaActual;
   const semanaLabel = semanaActual ? `Semana ${semanaActual.numero} · ${semanaActual.nombre}` : "";
   const totalEx     = exercises.length;
   const cacheKey    = `mc:session_demo_${todayDateStr()}`;
@@ -495,7 +521,7 @@ export function WorkoutProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <WorkoutContext.Provider value={{
-      exercises, routineName, dayLabel, dayFocus, semanaLabel, totalEx, hasAssignment, isLoading: portalLoading,
+      exercises, routineName, dayLabel, dayFocus, semanaLabel, totalEx, hasAssignment, hasAnyRoutine, isSelfPlan, isLoading: portalLoading,
       lifecycle, setLifecycle, watchStatus, doneSets, doneEx, setDoneEx, wDuration, biometrics,
       workoutDone, setWorkoutDone, activeExIdx, setActiveExIdx, restOn, restSecs, restTotal,
       startRest, skipRest, extendRest, syncStatus,

@@ -1,8 +1,8 @@
 import {
   View, Text, TextInput, TouchableOpacity, Pressable, ScrollView, Modal,
-  ActivityIndicator, StyleSheet, KeyboardAvoidingView, Platform, PanResponder, Image,
+  ActivityIndicator, StyleSheet, KeyboardAvoidingView, Platform, PanResponder, Image, useWindowDimensions,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { PulseButton } from "@/components/ui/PulseButton";
 import { PhotoSlider } from "@/components/PhotoSlider";
@@ -218,20 +218,27 @@ function buildMonthBlocks(weightHistory: { weight: number; date: string }[], pho
   }).reverse();
 }
 
+// Responsive fix: las miniaturas eran fijas (84px) — en pantallas angostas
+// (SE, teclado abierto reduciendo el alto disponible) se veían desbordadas o
+// desproporcionadas. Ahora el tamaño es un porcentaje real del ancho del
+// dispositivo (useWindowDimensions), acotado entre un piso y un techo para no
+// crecer sin control en tablets.
 function MonthPhotoGallery({ block, uploading, onAddPhoto }: {
   block: MonthBlock; uploading: boolean; onAddPhoto: (block: MonthBlock) => void;
 }) {
+  const { width } = useWindowDimensions();
+  const thumb = Math.max(64, Math.min(96, width * 0.22));
   return (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, marginTop: 12 }}>
       {block.photos.map(p => (
-        <Image key={p.id} source={{ uri: p.url }} style={{ width: 84, height: 84, borderRadius: 10 }} />
+        <Image key={p.id} source={{ uri: p.url }} style={{ width: thumb, height: thumb, borderRadius: 10 }} />
       ))}
       <TouchableOpacity
         activeOpacity={0.75}
         disabled={uploading}
         onPress={() => onAddPhoto(block)}
         style={{
-          width: 84, height: 84, borderRadius: 10, alignItems: "center", justifyContent: "center",
+          width: thumb, height: thumb, borderRadius: 10, alignItems: "center", justifyContent: "center",
           borderWidth: 1.5, borderStyle: "dashed", borderColor: "rgba(204,255,0,0.4)", backgroundColor: "rgba(204,255,0,0.04)",
         }}
       >
@@ -250,6 +257,7 @@ function EvolutionModal({ visible, onClose, weightHistory, photos, token, onUplo
 }) {
   const [uploadingKey, setUploadingKey] = useState<string | null>(null);
   const blocks = useMemo(() => buildMonthBlocks(weightHistory, photos), [weightHistory, photos]);
+  const insets = useSafeAreaInsets();
 
   const addPhoto = useCallback(async (block: MonthBlock) => {
     if (!token) return;
@@ -265,23 +273,29 @@ function EvolutionModal({ visible, onClose, weightHistory, photos, token, onUplo
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.97)" }}>
-        <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1 }}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginTop: 8, marginBottom: 16 }}>
-            <View>
+      {/* Responsive fix: SafeAreaView dentro de un <Modal> puede no resolver
+          los insets correctamente en algunos dispositivos Android (el Modal
+          nativo vive en su propia ventana) — useSafeAreaInsets() explícito
+          garantiza que el botón CERRAR nunca quede debajo de la status bar,
+          sin depender de ese contexto. */}
+      <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.97)", paddingTop: insets.top + 12, paddingBottom: insets.bottom }}>
+        <View style={{ flex: 1, flexGrow: 1 }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginBottom: 16 }}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
               <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 2, color: VOLT }}>BITÁCORA MENSUAL</Text>
               <Text style={{ ...athletic, fontSize: 22, color: "#fff", marginTop: 2 }}>EVOLUCIÓN COMPLETA</Text>
             </View>
             <TouchableOpacity
               activeOpacity={0.7}
               onPress={onClose}
+              hitSlop={10}
               style={{ borderWidth: 1, borderColor: VOLT, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 6 }}
             >
               <Text className="font-black" style={{ fontSize: 10, letterSpacing: 1, color: VOLT }}>CERRAR</Text>
             </TouchableOpacity>
           </View>
 
-          <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+          <ScrollView contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
             {blocks.length === 0 ? (
               <View style={{ backgroundColor: "#0F0F10", borderRadius: 16, padding: 24, alignItems: "center", borderWidth: 1, borderColor: "rgba(255,255,255,0.06)" }}>
                 <Text className="font-mono text-center" style={{ fontSize: 10, color: SILVER, lineHeight: 16 }}>
@@ -304,7 +318,7 @@ function EvolutionModal({ visible, onClose, weightHistory, photos, token, onUplo
               ))
             )}
           </ScrollView>
-        </SafeAreaView>
+        </View>
       </View>
     </Modal>
   );

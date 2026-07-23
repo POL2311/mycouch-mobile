@@ -1,28 +1,43 @@
 import {
-  View, Text, TouchableOpacity, Pressable, ScrollView, ImageBackground, StyleSheet,
+  View, Text, TouchableOpacity, Pressable, ScrollView, ImageBackground, StyleSheet, TextInput,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { MotiView } from "moti";
 import { useState, useCallback, useEffect } from "react";
 import * as Haptics from "expo-haptics";
-import { ChevronLeft, Check, ArrowRight } from "lucide-react-native";
+import { ChevronLeft, Check, ArrowRight, Shield, Zap } from "lucide-react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import Svg, { Polygon } from "react-native-svg";
 
 const VOLT   = "#CCFF00";
 const CYAN   = "#40E0D0";
 const SILVER = "#8e8e93";
 const athletic = { fontWeight: "900" as const, fontStyle: "italic" as const, textTransform: "uppercase" as const };
 
-type WizardStep = "STAGE" | "LIFESTYLE";
+type WizardStep = "WELCOME" | "STAGE" | "BIOMETRICS" | "LIFESTYLE";
+const STEP_ORDER: WizardStep[] = ["WELCOME", "STAGE", "BIOMETRICS", "LIFESTYLE"];
+
+export type OperationalMode = "COACH" | "SOLO";
 
 // Device-local draft of the intake answers — there's no self-signup endpoint
-// to submit this to (see below), so it's cached the same way lib/workout.tsx
-// caches an in-progress session, ready for a future signup step to read.
+// to submit this to (mycouch: accounts are provisioned by a coach via
+// POST /api/students, coach/admin-only; there is no public registration
+// route anywhere in the API surface), so it's cached the same way
+// lib/workout.tsx caches an in-progress session. operationalMode/
+// targetWeight/height ride along here too — a coach who later creates this
+// person's real account has no way to read this cache, but a self-coached
+// user (Módulo 2, lib/portal.tsx isSelfCoached) can act on it after they
+// eventually log in, and "UNIRME A UN COACH" is honored for real post-login
+// via the real /api/community/join code flow (see app/(portal)/perfil —
+// "VINCULAR CON UN COACH"), not simulated here.
 const INTAKE_CACHE_KEY = "mc:onboarding_intake";
-interface OnboardingIntake {
+export interface OnboardingIntake {
   stage: string;
   frictions: string[];
+  operationalMode?: OperationalMode;
+  targetWeight?: string;
+  height?: string;
 }
 
 // Maps directly to Student.stage's real vocabulary (Volumen/Definición/
@@ -78,16 +93,25 @@ function HeaderRow({ onBack, label }: { onBack: () => void; label: string }) {
   );
 }
 
-// ── SCREENS 2 & 3 · state-driven onboarding wizard ───────────────────────────
-// Only these two steps are pixel-specified. There's no public self-signup
-// endpoint anywhere in this app's API surface (accounts are provisioned by
-// coaches) — the old gateway's body-metrics/activity-frequency steps were
-// pure local BMI/TDEE display theater, never submitted anywhere, so they're
-// not carried forward here. Both forward actions on step 2 terminate the
-// funnel at /auth/login, the app's one real authenticated entry point.
+// ── State-driven onboarding wizard — WELCOME → STAGE → BIOMETRICS →
+// LIFESTYLE ───────────────────────────────────────────────────────────────
+// There's still no public self-signup endpoint anywhere in this app's API
+// surface (accounts are provisioned by a coach via POST /api/students,
+// coach/admin-only) — the old gateway's body-metrics/activity-frequency
+// steps were pure local BMI/TDEE display theater, never submitted anywhere,
+// so they're not carried forward here either. Every step's answer only ever
+// reaches AsyncStorage (INTAKE_CACHE_KEY) — the funnel still terminates at
+// /auth/login, the app's one real authenticated entry point, regardless of
+// which operationalMode the user picked. "UNIRME A UN COACH" is honored for
+// real post-login, not here — see app/(portal)/perfil/index.tsx's
+// "VINCULAR CON UN COACH" action, which calls the real POST
+// /api/community/join code flow once the user has an authenticated session.
 export default function OnboardingWizard() {
-  const [step, setStep] = useState<WizardStep>("STAGE");
+  const [step, setStep] = useState<WizardStep>("WELCOME");
+  const [operationalMode, setOperationalMode] = useState<OperationalMode | undefined>(undefined);
   const [stage, setStage] = useState<string>("Volumen");   // Volumen selected by default
+  const [targetWeight, setTargetWeight] = useState("");
+  const [height, setHeight] = useState("");
   const [frictions, setFrictions] = useState<Set<string>>(new Set());
 
   // ── Mount: hydrate any in-progress intake draft ──────────────────────────
@@ -99,20 +123,27 @@ export default function OnboardingWizard() {
         const cache = JSON.parse(raw) as OnboardingIntake;
         if (cache.stage) setStage(cache.stage);
         if (cache.frictions) setFrictions(new Set(cache.frictions));
+        if (cache.operationalMode) setOperationalMode(cache.operationalMode);
+        if (cache.targetWeight) setTargetWeight(cache.targetWeight);
+        if (cache.height) setHeight(cache.height);
       } catch {}
     })();
   }, []);
 
   // ── Save on meaningful state change ───────────────────────────────────────
   useEffect(() => {
-    const payload: OnboardingIntake = { stage, frictions: Array.from(frictions) };
+    const payload: OnboardingIntake = {
+      stage, frictions: Array.from(frictions), operationalMode, targetWeight, height,
+    };
     AsyncStorage.setItem(INTAKE_CACHE_KEY, JSON.stringify(payload)).catch(() => {});
-  }, [stage, frictions]);
+  }, [stage, frictions, operationalMode, targetWeight, height]);
+
+  const stepIdx = STEP_ORDER.indexOf(step);
 
   const goBack = useCallback(() => {
-    if (step === "LIFESTYLE") { setStep("STAGE"); return; }
+    if (stepIdx > 0) { setStep(STEP_ORDER[stepIdx - 1]!); return; }
     router.back();
-  }, [step]);
+  }, [stepIdx]);
 
   const toggleFriction = useCallback((id: string) => {
     Haptics.selectionAsync().catch(() => {});
@@ -123,17 +154,154 @@ export default function OnboardingWizard() {
     });
   }, []);
 
+  const selectMode = useCallback((mode: OperationalMode) => {
+    Haptics.selectionAsync().catch(() => {});
+    setOperationalMode(mode);
+  }, []);
+
   const advance = useCallback(async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    if (step === "STAGE") { setStep("LIFESTYLE"); return; }
+    if (stepIdx < STEP_ORDER.length - 1) { setStep(STEP_ORDER[stepIdx + 1]!); return; }
     router.push("/auth/login");
-  }, [step]);
+  }, [stepIdx]);
 
   return (
     <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1, backgroundColor: "#070708" }}>
-      <HeaderRow onBack={goBack} label="Onboarding" />
+      {step !== "WELCOME" && <HeaderRow onBack={goBack} label="Onboarding" />}
 
-      {step === "STAGE" ? (
+      {step === "WELCOME" ? (
+        <>
+          <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 40, paddingBottom: 24, flexGrow: 1 }} showsVerticalScrollIndicator={false}>
+            <MotiView from={{ opacity: 0, translateY: 12 }} animate={{ opacity: 1, translateY: 0 }} transition={{ type: "timing", duration: 350 }}>
+              {/* Isotipo MYCOACH — mismo diamante-F usado en Stats/Dieta/Salas */}
+              <View style={{ alignItems: "center", marginBottom: 28 }}>
+                <View style={{ width: 56, height: 56, alignItems: "center", justifyContent: "center" }}>
+                  <Svg width={56} height={56} viewBox="0 0 62 62" style={StyleSheet.absoluteFill}>
+                    <Polygon points="31,3 59,31 31,59 3,31" stroke={VOLT} strokeWidth={3} fill="none" />
+                  </Svg>
+                  <Text style={{ ...athletic, fontSize: 22, color: VOLT }}>F</Text>
+                </View>
+                <Text className="font-bold uppercase" style={{ color: "#fff", fontSize: 14, letterSpacing: 4, marginTop: 10 }}>
+                  MYCOACH
+                </Text>
+              </View>
+
+              <Text style={{ ...athletic, fontSize: 34, lineHeight: 36, color: "#fff", textAlign: "center", letterSpacing: -0.5 }}>
+                DISCIPLINA{"\n"}Y CONTROL
+              </Text>
+              <Text className="text-center" style={{ fontSize: 13, color: SILVER, marginTop: 10, lineHeight: 18, paddingHorizontal: 10 }}>
+                Elige cómo quieres operar. Puedes cambiarlo después desde tu perfil.
+              </Text>
+
+              <View style={{ marginTop: 32, gap: 12 }}>
+                <Pressable
+                  onPress={() => selectMode("COACH")}
+                  style={{
+                    borderRadius: 20, padding: 18, backgroundColor: "rgba(28,28,30,0.5)",
+                    borderWidth: 1.5, borderColor: operationalMode === "COACH" ? VOLT : "rgba(255,255,255,0.1)",
+                  }}
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                    <Shield size={22} color={operationalMode === "COACH" ? VOLT : "#fff"} />
+                    <View style={{ flex: 1 }}>
+                      <Text className="font-black" style={{ fontSize: 14, color: "#fff", letterSpacing: 0.3 }}>
+                        [ 🛡️ UNIRME A UN COACH ]
+                      </Text>
+                      <Text style={{ fontSize: 11, color: SILVER, marginTop: 3, lineHeight: 15 }}>
+                        Un coach diseña y ajusta tu plan. Vincularás tu código después de iniciar sesión.
+                      </Text>
+                    </View>
+                    {operationalMode === "COACH" && <Check size={18} color={VOLT} strokeWidth={3} />}
+                  </View>
+                </Pressable>
+
+                <Pressable
+                  onPress={() => selectMode("SOLO")}
+                  style={{
+                    borderRadius: 20, padding: 18, backgroundColor: "rgba(28,28,30,0.5)",
+                    borderWidth: 1.5, borderColor: operationalMode === "SOLO" ? VOLT : "rgba(255,255,255,0.1)",
+                  }}
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                    <Zap size={22} color={operationalMode === "SOLO" ? VOLT : "#fff"} />
+                    <View style={{ flex: 1 }}>
+                      <Text className="font-black" style={{ fontSize: 14, color: "#fff", letterSpacing: 0.3 }}>
+                        [ ⚡ MODO AUTO-ENTRENADOR (SOLO) ]
+                      </Text>
+                      <Text style={{ fontSize: 11, color: SILVER, marginTop: 3, lineHeight: 15 }}>
+                        Control total: eliges rutinas y dietas del catálogo por tu cuenta, sin coach.
+                      </Text>
+                    </View>
+                    {operationalMode === "SOLO" && <Check size={18} color={VOLT} strokeWidth={3} />}
+                  </View>
+                </Pressable>
+              </View>
+            </MotiView>
+          </ScrollView>
+
+          <FloorDock onBack={goBack}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              disabled={!operationalMode}
+              onPress={advance}
+              style={{
+                flex: 1, height: 48, borderRadius: 24, backgroundColor: VOLT, opacity: operationalMode ? 1 : 0.35,
+                flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+              }}
+            >
+              <Text style={{ ...athletic, fontSize: 14, color: "#000" }}>Continuar</Text>
+              <ArrowRight size={16} color="#000" />
+            </TouchableOpacity>
+          </FloorDock>
+        </>
+      ) : step === "BIOMETRICS" ? (
+        <>
+          <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
+            <MotiView from={{ opacity: 0, translateX: 24 }} animate={{ opacity: 1, translateX: 0 }} transition={{ type: "timing", duration: 300 }}>
+              <Text className="font-mono" style={{ fontSize: 11, letterSpacing: 2, color: CYAN, textTransform: "uppercase" }}>
+                [ TELEMETRIC DATA INTAKE // BIOMETRICS ]
+              </Text>
+              <Text style={{ ...athletic, fontSize: 26, color: "#fff", marginTop: 10, letterSpacing: -0.5 }}>
+                Tus métricas base
+              </Text>
+              <Text style={{ fontSize: 13, color: SILVER, marginTop: 4, marginBottom: 24 }}>
+                Iniciará tu gráfica de progreso en cuanto crees tu cuenta.
+              </Text>
+
+              {[
+                { label: "PESO OBJETIVO (KG)", value: targetWeight, set: setTargetWeight },
+                { label: "ALTURA (CM)",        value: height,       set: setHeight },
+              ].map(f => (
+                <View key={f.label} style={{ marginBottom: 14 }}>
+                  <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 1, color: SILVER, marginBottom: 6 }}>{f.label}</Text>
+                  <TextInput
+                    value={f.value}
+                    onChangeText={f.set}
+                    keyboardType="decimal-pad"
+                    placeholderTextColor="#52525b"
+                    selectionColor={VOLT}
+                    style={{ backgroundColor: "rgba(28,28,30,0.5)", borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14, color: "#fff", fontSize: 15, borderWidth: 1, borderColor: "rgba(255,255,255,0.08)" }}
+                  />
+                </View>
+              ))}
+            </MotiView>
+          </ScrollView>
+
+          <FloorDock onBack={goBack}>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={advance}
+              style={{
+                flex: 1, height: 48, borderRadius: 24, backgroundColor: VOLT,
+                flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+              }}
+            >
+              <Text style={{ ...athletic, fontSize: 14, color: "#000" }}>Continuar</Text>
+              <ArrowRight size={16} color="#000" />
+            </TouchableOpacity>
+          </FloorDock>
+        </>
+      ) : step === "STAGE" ? (
         <>
           <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
             <MotiView from={{ opacity: 0, translateX: 24 }} animate={{ opacity: 1, translateX: 0 }} transition={{ type: "timing", duration: 300 }}>

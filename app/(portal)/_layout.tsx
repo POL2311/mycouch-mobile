@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { PortalProvider } from "@/lib/portal";
+import { SelfCoachProvider } from "@/lib/selfCoach";
 import { WorkoutProvider } from "@/lib/workout";
 import { GamificationProvider } from "@/lib/gamification";
 import { MotivationProvider } from "@/lib/motivation";
@@ -159,6 +160,10 @@ function LuxuryDock({ state, navigation }: BottomTabBarProps) {
 export default function PortalLayout() {
   return (
     <PortalProvider>
+      {/* Módulo 2 "Auto-Entrenador" — el plan local (sin coach) que
+          WorkoutProvider abajo consulta cuando no hay routineJson real
+          asignado. Debe montarse antes de WorkoutProvider. */}
+      <SelfCoachProvider>
       {/* Session engine shared between the WORKOUT lobby and the dynamic
           exercise/[id] focus screen, so the lifecycle machine, timers, and
           set state survive the stack push instead of forking per screen. */}
@@ -185,6 +190,7 @@ export default function PortalLayout() {
       </MotivationProvider>
       </GamificationProvider>
       </WorkoutProvider>
+      </SelfCoachProvider>
     </PortalProvider>
   );
 }

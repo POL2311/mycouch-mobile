@@ -8,16 +8,19 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { PulseButton } from "@/components/ui/PulseButton";
 import { NeonGlowView } from "@/components/ui/NeonGlowView";
 import { ShimmerScreen } from "@/components/ShimmerLoader";
-import { Play, Pause, Check, Moon } from "lucide-react-native";
+import { Play, Pause, Check, Moon, Salad, Plus } from "lucide-react-native";
 import { BlurView } from "expo-blur";
 import Svg, { Defs, LinearGradient, Stop, Rect } from "react-native-svg";
 import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
 import { useWorkout, todayDateStr } from "@/lib/workout";
+import { usePortal, isSelfCoached } from "@/lib/portal";
+import { useSelfCoach } from "@/lib/selfCoach";
 import { useGamification } from "@/lib/gamification";
 import { useMotivation } from "@/lib/motivation";
-import { triggerImpact } from "@/lib/haptics";
+import { triggerImpact, triggerSuccess } from "@/lib/haptics";
 import { VOLT, WATER_TARGET_ML, WATER_DOSE_ML } from "@/components/workout-ui";
+import { TemplatePickerModal } from "@/components/portal/TemplatePickerModal";
 
 // ── Cinema Bento card imagery — placeholder gym stock photography keyed by
 // muscle group, until the coach exercise catalog reliably supplies imageUrl.
@@ -80,13 +83,17 @@ export default function WorkoutTab() {
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const {
-    exercises, dayFocus, semanaLabel, totalEx, hasAssignment, isLoading,
+    exercises, dayFocus, semanaLabel, totalEx, hasAssignment, hasAnyRoutine, isLoading,
     lifecycle, setLifecycle, watchStatus, doneSets, doneEx, biometrics,
     setActiveExIdx, handleFinalizar, resetSession, syncCompletedSession,
     durationStr, allDone, sortedIndices, lifecycleLabel,
   } = useWorkout();
   const { currentRank, progressPct, nextThresholdXP, addXP, rankUpFlash, clearRankUpFlash } = useGamification();
   const { celebrate } = useMotivation();
+  const { student } = usePortal();
+  const { applyRoutineTemplate } = useSelfCoach();
+  const selfCoached = isSelfCoached(student);
+  const [showRoutinePicker, setShowRoutinePicker] = useState(false);
 
   // Auto-dismiss the rank-up toast a couple seconds after it fires.
   useEffect(() => {
@@ -413,11 +420,13 @@ export default function WorkoutTab() {
           RUTINA DEL DÍA
         </Text>
 
-        {/* Rest day — resolveRoutineDay() (lib/workout.tsx) found no routine
-            pinned or ordinally scheduled for today's weekday. Framed as a
-            deliberate rest day rather than a raw "unassigned" error state,
-            since for most students most days genuinely are rest days. */}
-        {!hasAssignment && (
+        {/* Módulo 3/2 — !hasAssignment se ramifica en tres estados reales,
+            distinguidos por hasAnyRoutine (lib/workout.tsx: ¿existe alguna
+            rutina, real o auto-elegida?) y selfCoached (lib/portal.tsx:
+            ¿el alumno tiene coach vinculado?): */}
+        {!hasAssignment && hasAnyRoutine && (
+          // 1 · Hay rutina (real o self-plan) pero hoy resolvió sin
+          //     ejercicios — descanso legítimo dentro del plan.
           <View style={{ ...GLASS, borderRadius: 24, marginHorizontal: GUTTER, padding: 28, alignItems: "center", gap: 12 }}>
             <Moon size={26} color={CYAN} strokeWidth={1.5} />
             <Text style={{ ...athletic, fontSize: 20, color: "#fff", textAlign: "center" }}>
@@ -426,6 +435,44 @@ export default function WorkoutTab() {
             <Text className="text-center" style={{ fontSize: 12, fontWeight: "700", color: SILVER, lineHeight: 18 }}>
               Tu coach no programó entrenamiento para hoy. Aprovecha para recuperar — el músculo crece en el descanso, no solo en el gimnasio.
             </Text>
+          </View>
+        )}
+
+        {!hasAssignment && !hasAnyRoutine && !selfCoached && (
+          // 2 · Nunca hubo rutina, Y el alumno sí tiene coach — el coach
+          //     enfocó la asignación exclusivamente en nutrición/descanso.
+          <View style={{ ...GLASS, borderRadius: 24, marginHorizontal: GUTTER, padding: 28, alignItems: "center", gap: 12 }}>
+            <Salad size={26} color={VOLT} strokeWidth={1.5} />
+            <Text style={{ ...athletic, fontSize: 17, color: "#fff", textAlign: "center", letterSpacing: -0.3 }}>
+              {"DÍA DE RECUPERACIÓN\n// SIN PROGRAMACIÓN DE ENTRENO HOY"}
+            </Text>
+            <Text className="text-center" style={{ fontSize: 12, fontWeight: "700", color: SILVER, lineHeight: 18 }}>
+              Tu coach enfocó tu plan de hoy exclusivamente en la nutrición y descanso muscular.
+            </Text>
+          </View>
+        )}
+
+        {!hasAssignment && !hasAnyRoutine && selfCoached && (
+          // 3 · Modo auto-entrenador sin plan elegido todavía — desbloquea
+          //     el selector de plantillas reales del catálogo (Módulo 2).
+          <View style={{ ...GLASS, borderRadius: 24, marginHorizontal: GUTTER, padding: 28, alignItems: "center", gap: 14 }}>
+            <Text style={{ ...athletic, fontSize: 18, color: "#fff", textAlign: "center" }}>
+              Modo auto-entrenador
+            </Text>
+            <Text className="text-center" style={{ fontSize: 12, fontWeight: "700", color: SILVER, lineHeight: 18 }}>
+              No tienes coach vinculado — elige una rutina del catálogo para empezar a entrenar hoy mismo.
+            </Text>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => { triggerImpact(); setShowRoutinePicker(true); }}
+              style={{
+                width: "100%", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+                backgroundColor: VOLT, borderRadius: 999, paddingVertical: 14,
+              }}
+            >
+              <Plus size={16} color="#000" />
+              <Text style={{ ...athletic, fontSize: 13, color: "#000" }}>CREAR MI RUTINA</Text>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -527,6 +574,17 @@ export default function WorkoutTab() {
           </PulseButton>
         </MotiView>
       )}
+
+      <TemplatePickerModal
+        visible={showRoutinePicker}
+        onClose={() => setShowRoutinePicker(false)}
+        type="routine"
+        onApply={async tpl => {
+          if (tpl.type !== "routine") return;
+          await applyRoutineTemplate(tpl);
+          triggerSuccess();
+        }}
+      />
     </SafeAreaView>
   );
 }

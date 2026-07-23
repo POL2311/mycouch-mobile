@@ -11,7 +11,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useEvent } from "expo";
 import { useVideoPlayer, VideoView, type VideoPlayer, type VideoPlayerStatus } from "expo-video";
 import { BlurView } from "expo-blur";
-import { Heart, Zap, Check, ChevronLeft, Settings, Dumbbell, Minus, Plus, Play, Pause, VideoOff } from "lucide-react-native";
+import { Heart, Zap, Check, ChevronLeft, Settings, Dumbbell, Minus, Plus, Play, Pause, VideoOff, RotateCcw } from "lucide-react-native";
 import Svg, { Circle, Defs, LinearGradient, Stop, Rect } from "react-native-svg";
 import { useWorkout } from "@/lib/workout";
 import { useGamification } from "@/lib/gamification";
@@ -208,16 +208,46 @@ function ActiveWorkoutView({
           // Sin videoUrl asignado — placeholder estático, sin nada que cargar.
           <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: "#1E1E1E" }} />
         ) : videoStatus === "error" ? (
-          // El enlace existe pero falló al cargar — miniatura premium (la
-          // foto del ejercicio si el coach la cargó) en vez de una pantalla
-          // negra sin ninguna señal de qué pasó.
-          ex.imageUrl ? (
-            <Image source={{ uri: ex.imageUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-          ) : (
-            <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: "#1E1E1E", alignItems: "center", justifyContent: "center" }}>
-              <VideoOff size={26} color="rgba(255,255,255,0.3)" />
+          // El enlace existe pero falló, no responde o expiró — miniatura
+          // premium (la foto del ejercicio si el coach la cargó) + badge
+          // neón "DEMOSTRACIÓN VISUAL" + botón de reintento (Módulo 4). El
+          // reintento llama a player.replace() sobre el MISMO source en vez
+          // de recrear el hook — no bloquea ni congela el resto de la
+          // interfaz mientras reintenta.
+          <View style={StyleSheet.absoluteFill}>
+            {ex.imageUrl ? (
+              <Image source={{ uri: ex.imageUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" />
+            ) : (
+              <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: "#1E1E1E", alignItems: "center", justifyContent: "center" }}>
+                <VideoOff size={26} color="rgba(255,255,255,0.3)" />
+              </View>
+            )}
+            <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.35)" }} />
+            <View
+              style={{
+                position: "absolute", top: 12, left: 12, flexDirection: "row", alignItems: "center", gap: 5,
+                backgroundColor: "rgba(0,0,0,0.6)", borderWidth: 1, borderColor: VOLT, borderRadius: 6,
+                paddingHorizontal: 8, paddingVertical: 4,
+              }}
+            >
+              <View style={{ width: 5, height: 5, borderRadius: 2.5, backgroundColor: VOLT }} />
+              <Text style={{ fontSize: 9, fontWeight: "900", letterSpacing: 1, color: VOLT, textTransform: "uppercase" }}>
+                DEMOSTRACIÓN VISUAL
+              </Text>
             </View>
-          )
+            <TouchableOpacity
+              activeOpacity={0.75}
+              onPress={() => { triggerImpact(); player.replace(videoSource); }}
+              style={{
+                position: "absolute", bottom: 12, right: 12, flexDirection: "row", alignItems: "center", gap: 6,
+                backgroundColor: "rgba(0,0,0,0.65)", borderWidth: 1, borderColor: "rgba(255,255,255,0.25)",
+                borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7,
+              }}
+            >
+              <RotateCcw size={13} color="#fff" />
+              <Text style={{ fontSize: 10, fontWeight: "800", letterSpacing: 0.5, color: "#fff" }}>REINTENTAR</Text>
+            </TouchableOpacity>
+          </View>
         ) : videoStatus === "readyToPlay" ? (
           <VideoView
             player={player}

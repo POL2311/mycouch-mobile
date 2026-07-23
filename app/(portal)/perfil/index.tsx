@@ -1,7 +1,8 @@
 import {
   View, Text, TouchableOpacity, Pressable, ScrollView, Modal, ImageBackground, StyleSheet, TextInput, Image, Share,
+  KeyboardAvoidingView, Platform,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MotiView } from "moti";
 import { useState, useEffect, useCallback } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -13,10 +14,10 @@ import { triggerImpact, triggerSuccess, triggerWarning } from "@/lib/haptics";
 import { neonGlow } from "@/lib/neon";
 import {
   Flame, Check, Star, Lock, LogOut, Mail, Zap, Settings, X, Droplet, Dumbbell, Utensils,
-  Camera, ShieldCheck, Share2, Award, Eye, EyeOff,
+  Camera, ShieldCheck, Share2, Award, Eye, EyeOff, Activity, Link2,
 } from "lucide-react-native";
 import Svg, { Defs, LinearGradient, Stop, Rect } from "react-native-svg";
-import { usePortal, uploadProgressPhoto } from "@/lib/portal";
+import { usePortal, uploadProgressPhoto, isSelfCoached, joinCommunityRoom } from "@/lib/portal";
 import { useAuth } from "@/lib/session";
 import { useWorkout, todayDateStr } from "@/lib/workout";
 import { useGamification, RANK_TIERS } from "@/lib/gamification";
@@ -132,6 +133,7 @@ function SettingsOverlay({ visible, onClose, name, planLabel }: {
   const [notifNutrition, setNotifNutrition] = useState(true);
   const [notifCommunity, setNotifCommunity] = useState(false);
   const [saved,          setSaved]          = useState(false);
+  const insets = useSafeAreaInsets();
 
   const rows = [
     { title: "Recordatorios de Entrenamiento", sub: "Push al inicio de tu sesión programada", on: notifWorkout,   set: setNotifWorkout },
@@ -146,7 +148,7 @@ function SettingsOverlay({ visible, onClose, name, planLabel }: {
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.95)", padding: 24, paddingTop: 70 }}>
+      <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.95)", padding: 24, paddingTop: insets.top + 24 }}>
         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
           <Text style={{ ...athletic, fontSize: 20, color: "#fff" }}>PREFERENCIAS</Text>
           <TouchableOpacity
@@ -302,11 +304,17 @@ function IdentityModal({ visible, onClose, student, avatarUrl, token, onRefresh 
     setTimeout(() => setSaved(false), 1800);
   }, [name, email, weight, student?.currentWeight, token, onRefresh]);
 
+  const insets = useSafeAreaInsets();
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.97)" }}>
-        <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1 }}>
-          <ScrollView contentContainerStyle={{ padding: 24, paddingBottom: 48 }} showsVerticalScrollIndicator={false}>
+      {/* Responsive fix: insets explícitos + KeyboardAvoidingView — este
+          modal tiene varios TextInput (nombre/correo/peso/contraseña); sin
+          esto, el teclado tapaba GUARDAR CAMBIOS y el botón CERRAR quedaba a
+          merced de un SafeAreaView que un <Modal> no siempre resuelve bien. */}
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+        <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.97)", paddingTop: insets.top + 12, paddingBottom: insets.bottom }}>
+          <ScrollView contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 24, paddingBottom: 48 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 22 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                 <ShieldCheck size={16} color={VOLT} />
@@ -315,6 +323,7 @@ function IdentityModal({ visible, onClose, student, avatarUrl, token, onRefresh 
               <TouchableOpacity
                 activeOpacity={0.7}
                 onPress={onClose}
+                hitSlop={10}
                 style={{ flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: "rgba(204,255,0,0.08)", borderWidth: 1, borderColor: "rgba(204,255,0,0.25)" }}
               >
                 <X size={12} color={VOLT} />
@@ -418,7 +427,221 @@ function IdentityModal({ visible, onClose, student, avatarUrl, token, onRefresh 
               </View>
             </View>
           </ScrollView>
-        </SafeAreaView>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+// ── VINCULAR CON UN COACH (Módulo 1 "[ 🛡️ UNIRME A UN COACH ]") — la mitad
+// real de la elección de modo operativo del onboarding. mycouch no tiene
+// registro público de cuentas, así que ese modal previo al login solo podía
+// cachear la intención localmente (app/auth/onboarding.tsx); esta es la
+// pieza que SÍ puede ejecutar algo real, porque ya hay una sesión
+// autenticada: el mismo POST /api/community/join (código privado) que Salas
+// ya usa para unirse a una sala — linkStudentToCoach() del lado servidor
+// pisa Student.coachId de verdad. Solo visible cuando isSelfCoached(student)
+// — un alumno que ya tiene coach no necesita ni debe poder reemplazarlo aquí.
+function CoachLinkModal({ visible, onClose, token, onLinked }: {
+  visible: boolean; onClose: () => void; token: string | null; onLinked: () => void;
+}) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  const submit = useCallback(async () => {
+    const trimmed = code.trim();
+    if (!trimmed) return;
+    setBusy(true);
+    setError(null);
+    const result = await joinCommunityRoom({ code: trimmed }, token);
+    setBusy(false);
+    if (result.ok) {
+      triggerSuccess();
+      setSuccess(result.coachName ?? "tu coach");
+      onLinked();
+      setTimeout(() => { setSuccess(null); setCode(""); onClose(); }, 1400);
+    } else {
+      triggerWarning();
+      setError(result.error ?? "CÓDIGO INVÁLIDO");
+    }
+  }, [code, token, onLinked, onClose]);
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.95)", padding: 24, paddingTop: 90, justifyContent: "center" }}>
+        <View style={{ ...GLASS, borderRadius: 20, padding: 22 }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Link2 size={16} color={VOLT} />
+              <Text style={{ ...athletic, fontSize: 16, color: "#fff" }}>VINCULAR CON UN COACH</Text>
+            </View>
+            <Pressable onPress={onClose} hitSlop={10}>
+              <X size={16} color={SILVER} />
+            </Pressable>
+          </View>
+          <Text style={{ fontSize: 12, color: SILVER, lineHeight: 17, marginBottom: 16 }}>
+            Ingresa el código táctico que te compartió tu coach. Al vincularte, tus rutinas y dietas locales de auto-entrenador quedan en tu dispositivo — el coach asignará las suyas cuando lo considere.
+          </Text>
+          <TextInput
+            value={code}
+            onChangeText={t => { setCode(t.toUpperCase()); setError(null); }}
+            placeholder="CÓDIGO TÁCTICO"
+            placeholderTextColor="#52525b"
+            autoCapitalize="characters"
+            autoCorrect={false}
+            editable={!busy && !success}
+            selectionColor={VOLT}
+            className="font-black"
+            style={{
+              height: 54, textAlign: "center", fontSize: 16, letterSpacing: 3, color: success ? VOLT : error ? "#f87171" : "#fff",
+              backgroundColor: "#1C1C1E", borderRadius: 14, borderWidth: 1.5,
+              borderColor: success ? VOLT : error ? "#f87171" : "rgba(255,255,255,0.1)",
+            }}
+          />
+          {error && (
+            <Text className="font-mono text-center" style={{ fontSize: 10, letterSpacing: 0.5, color: "#f87171", marginTop: 8 }}>
+              ✕ {error}
+            </Text>
+          )}
+          {success && (
+            <Text className="font-mono text-center" style={{ fontSize: 10, letterSpacing: 0.5, color: VOLT, marginTop: 8 }}>
+              ⚡ VINCULADO CON {success.toUpperCase()}
+            </Text>
+          )}
+          <TouchableOpacity
+            activeOpacity={0.85}
+            disabled={busy || !code.trim() || !!success}
+            onPress={submit}
+            style={{
+              marginTop: 16, borderRadius: 999, paddingVertical: 14, alignItems: "center",
+              backgroundColor: VOLT, opacity: busy || !code.trim() || !!success ? 0.5 : 1,
+            }}
+          >
+            <Text style={{ ...athletic, fontSize: 12, color: "#000" }}>
+              {busy ? "VINCULANDO..." : "VINCULAR"}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ── BITÁCORA TÁCTICA / telemetría de ritmo cardíaco — encapsulada en su
+// propio modal (limpieza de UI). Antes esta lista (potencialmente larga: una
+// tarjeta por sesión de entreno con BPM/KCAL de Apple Watch) vivía inline en
+// el scroll principal del Perfil y lo saturaba visualmente; ahora vive
+// aislada, detrás de un único botón de acceso. Misma lógica de render
+// (loading shimmer / vacío / lista con HRSparkline), solo movida de sitio. ──
+function TelemetryLogModal({ visible, onClose, loading, history }: {
+  visible: boolean; onClose: () => void; loading: boolean; history: BioSession[];
+}) {
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.97)", paddingTop: insets.top + 12, paddingBottom: insets.bottom }}>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginBottom: 16 }}>
+          <View>
+            <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 2, color: SILVER }}>ARCHIVO DE MISIONES</Text>
+            <Text style={{ ...athletic, fontSize: 20, color: "#fff", marginTop: 2 }}>BITÁCORA TÁCTICA</Text>
+          </View>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={onClose}
+            hitSlop={10}
+            style={{ flexDirection: "row", alignItems: "center", gap: 5, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, backgroundColor: "rgba(204,255,0,0.08)", borderWidth: 1, borderColor: "rgba(204,255,0,0.25)" }}
+          >
+            <X size={12} color={VOLT} />
+            <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 1, color: VOLT }}>CERRAR</Text>
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+          {loading ? (
+            [0, 1, 2].map(i => (
+              <MotiView
+                key={i}
+                from={{ opacity: 0.4 }}
+                animate={{ opacity: 0.9 }}
+                transition={{ type: "timing", duration: 600, loop: true, repeatReverse: true }}
+                style={{ height: 72, borderRadius: 14, backgroundColor: "rgba(24,24,27,0.6)", marginBottom: 10 }}
+              />
+            ))
+          ) : history.length === 0 ? (
+            <View style={{ ...GLASS, borderRadius: 16, padding: 20, alignItems: "center" }}>
+              <Text className="font-mono" style={{ fontSize: 10, letterSpacing: 1, color: "#d4d4d8" }}>
+                SIN SESIONES REGISTRADAS
+              </Text>
+              <Text className="text-center" style={{ fontSize: 11, color: SILVER, marginTop: 6, lineHeight: 16 }}>
+                Tus sesiones apareceran aqui tras completar tu primer entrenamiento.
+              </Text>
+            </View>
+          ) : (
+            history.map(session => {
+              const dateLabel = (session.date ?? "").slice(0, 10).split("-").reverse().join("/");
+              const bio       = session.biometrics;
+              const hasHrData = Array.isArray(bio?.heartRateSeries) && (bio?.heartRateSeries?.length ?? 0) > 0;
+              const hasAnyBio = !!bio && (bio.avgHeartRate != null || bio.activeCalories != null || !!bio.deviceSource);
+              return (
+                <View key={session.id} style={{ ...GLASS, borderRadius: 16, marginBottom: 10, padding: 14 }}>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                    <View style={{ flex: 1, paddingRight: 12 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: VOLT, alignItems: "center", justifyContent: "center" }}>
+                          <Check size={10} color="#000" strokeWidth={3.5} />
+                        </View>
+                        <Text className="font-mono" style={{ fontSize: 10, letterSpacing: 1, color: "#d4d4d8" }}>{dateLabel}</Text>
+                      </View>
+                      <Text style={{ ...athletic, fontSize: 14, color: "#fff", marginTop: 6 }} numberOfLines={2}>
+                        {session.name}
+                      </Text>
+                      {hasHrData && bio?.heartRateSeries && (
+                        <>
+                          <Text className="font-mono" style={{ fontSize: 7, letterSpacing: 1, color: SILVER, marginTop: 8 }}>
+                            HR CURVE · {bio.heartRateSeries.length} PTS
+                          </Text>
+                          <HRSparkline series={bio.heartRateSeries} />
+                        </>
+                      )}
+                    </View>
+                    <View style={{ gap: 4, alignItems: "flex-end" }}>
+                      {hasAnyBio && bio ? (
+                        <>
+                          {bio.avgHeartRate != null && (
+                            <View style={{ backgroundColor: "rgba(24,24,27,0.6)", borderWidth: 1, borderColor: "rgba(39,39,42,0.8)", borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 }}>
+                              <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 0.5, color: "#f87171" }}>❤ {bio.avgHeartRate} BPM</Text>
+                            </View>
+                          )}
+                          {bio.maxHeartRate != null && (
+                            <View style={{ backgroundColor: "rgba(24,24,27,0.6)", borderWidth: 1, borderColor: "rgba(39,39,42,0.8)", borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 }}>
+                              <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 0.5, color: "#d4d4d8" }}>MAX {bio.maxHeartRate} BPM</Text>
+                            </View>
+                          )}
+                          {bio.activeCalories != null && (
+                            <View style={{ backgroundColor: "rgba(24,24,27,0.6)", borderWidth: 1, borderColor: "rgba(39,39,42,0.8)", borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 }}>
+                              <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 0.5, color: VOLT }}>⚡ {bio.activeCalories} KCAL</Text>
+                            </View>
+                          )}
+                          {bio.deviceSource && (
+                            <View style={{ backgroundColor: "rgba(24,24,27,0.6)", borderWidth: 1, borderColor: "rgba(39,39,42,0.8)", borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 }}>
+                              <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 0.5, color: CYAN }}>◈ {bio.deviceSource.slice(0, 20)}</Text>
+                            </View>
+                          )}
+                        </>
+                      ) : (
+                        <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 0.5, color: SILVER }}>
+                          [ SIN REGISTRO TELEMÉTRICO ]
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                </View>
+              );
+            })
+          )}
+        </ScrollView>
       </View>
     </Modal>
   );
@@ -432,6 +655,7 @@ export default function PerfilScreen() {
   const { token, logout } = useAuth();
   const { doneEx, allDone } = useWorkout();
   const { totalXP, currentRank, progressPct, nextThresholdXP, addXP } = useGamification();
+  const insets = useSafeAreaInsets();
 
   const streak = student?.streak ?? 0;
   const stage  = student?.stage ?? "Definición";
@@ -556,6 +780,9 @@ export default function PerfilScreen() {
   const [showRankDrawer, setShowRankDrawer] = useState(false);
   const [showSettings,   setShowSettings]   = useState(false);
   const [showIdentity,   setShowIdentity]   = useState(false);
+  const [showCoachLink,  setShowCoachLink]  = useState(false);
+  const selfCoachedStudent = isSelfCoached(student);
+  const [showTelemetry,  setShowTelemetry]  = useState(false);
 
   // Avatar activo (Módulo 5) — la foto AVATAR más reciente entre las fotos
   // reales de detail.photos (mismo dato que alimenta la galería mensual de
@@ -884,6 +1111,20 @@ export default function PerfilScreen() {
             </View>
             <Text style={{ fontSize: 14, color: SILVER }}>›</Text>
           </TouchableOpacity>
+          {selfCoachedStudent && (
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => { triggerImpact(); setShowCoachLink(true); }}
+              style={{ ...GLASS, borderColor: "rgba(204,255,0,0.25)", borderRadius: 16, padding: 14, flexDirection: "row", alignItems: "center", gap: 12 }}
+            >
+              <Link2 size={16} color={VOLT} />
+              <View style={{ flex: 1 }}>
+                <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 1, color: VOLT }}>MODO AUTO-ENTRENADOR</Text>
+                <Text style={{ fontSize: 13, fontWeight: "700", color: "#fff", marginTop: 1 }}>Vincular con un coach</Text>
+              </View>
+              <Text style={{ fontSize: 14, color: SILVER }}>›</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
             activeOpacity={0.7}
             onPress={() => setShowSettings(true)}
@@ -936,95 +1177,25 @@ export default function PerfilScreen() {
           </View>
         </View>
 
-        {/* ── 8 · ARCHIVO DE MISIONES // BITÁCORA TÁCTICA ── */}
-        <Text style={{ fontSize: 10, letterSpacing: 1.5, fontWeight: "bold", color: SILVER, textTransform: "uppercase", marginTop: 24, paddingHorizontal: 20, marginBottom: 10 }}>
-          ARCHIVO DE MISIONES // BITÁCORA TÁCTICA
-        </Text>
-
-        {bioLoading ? (
-          [0, 1, 2].map(i => (
-            <MotiView
-              key={i}
-              from={{ opacity: 0.4 }}
-              animate={{ opacity: 0.9 }}
-              transition={{ type: "timing", duration: 600, loop: true, repeatReverse: true }}
-              style={{ height: 72, borderRadius: 14, backgroundColor: "rgba(24,24,27,0.6)", marginHorizontal: 20, marginBottom: 10 }}
-            />
-          ))
-        ) : bioHistory.length === 0 ? (
-          <View style={{ ...GLASS, borderRadius: 16, marginHorizontal: 20, padding: 20, alignItems: "center" }}>
-            <Text className="font-mono" style={{ fontSize: 10, letterSpacing: 1, color: "#d4d4d8" }}>
-              SIN SESIONES REGISTRADAS
-            </Text>
-            <Text className="text-center" style={{ fontSize: 11, color: SILVER, marginTop: 6, lineHeight: 16 }}>
-              Tus sesiones apareceran aqui tras completar tu primer entrenamiento.
-            </Text>
-          </View>
-        ) : (
-          bioHistory.map(session => {
-            // slice(0,10) guards against a full ISO datetime sneaking through
-            // the contract's YYYY-MM-DD — reversed, that would mangle the label.
-            const dateLabel = (session.date ?? "").slice(0, 10).split("-").reverse().join("/");
-            const bio       = session.biometrics;
-            const hasHrData = Array.isArray(bio?.heartRateSeries) && (bio?.heartRateSeries?.length ?? 0) > 0;
-            const hasAnyBio = !!bio && (bio.avgHeartRate != null || bio.activeCalories != null || !!bio.deviceSource);
-            return (
-              <View key={session.id} style={{ ...GLASS, borderRadius: 16, marginHorizontal: 20, marginBottom: 10, padding: 14 }}>
-                <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                  <View style={{ flex: 1, paddingRight: 12 }}>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                      <View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: VOLT, alignItems: "center", justifyContent: "center" }}>
-                        <Check size={10} color="#000" strokeWidth={3.5} />
-                      </View>
-                      <Text className="font-mono" style={{ fontSize: 10, letterSpacing: 1, color: "#d4d4d8" }}>{dateLabel}</Text>
-                    </View>
-                    <Text style={{ ...athletic, fontSize: 14, color: "#fff", marginTop: 6 }} numberOfLines={2}>
-                      {session.name}
-                    </Text>
-                    {hasHrData && bio?.heartRateSeries && (
-                      <>
-                        <Text className="font-mono" style={{ fontSize: 7, letterSpacing: 1, color: SILVER, marginTop: 8 }}>
-                          HR CURVE · {bio.heartRateSeries.length} PTS
-                        </Text>
-                        <HRSparkline series={bio.heartRateSeries} />
-                      </>
-                    )}
-                  </View>
-                  <View style={{ gap: 4, alignItems: "flex-end" }}>
-                    {hasAnyBio && bio ? (
-                      <>
-                        {bio.avgHeartRate != null && (
-                          <View style={{ backgroundColor: "rgba(24,24,27,0.6)", borderWidth: 1, borderColor: "rgba(39,39,42,0.8)", borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 }}>
-                            <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 0.5, color: "#f87171" }}>❤ {bio.avgHeartRate} BPM</Text>
-                          </View>
-                        )}
-                        {bio.maxHeartRate != null && (
-                          <View style={{ backgroundColor: "rgba(24,24,27,0.6)", borderWidth: 1, borderColor: "rgba(39,39,42,0.8)", borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 }}>
-                            <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 0.5, color: "#d4d4d8" }}>MAX {bio.maxHeartRate} BPM</Text>
-                          </View>
-                        )}
-                        {bio.activeCalories != null && (
-                          <View style={{ backgroundColor: "rgba(24,24,27,0.6)", borderWidth: 1, borderColor: "rgba(39,39,42,0.8)", borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 }}>
-                            <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 0.5, color: VOLT }}>⚡ {bio.activeCalories} KCAL</Text>
-                          </View>
-                        )}
-                        {bio.deviceSource && (
-                          <View style={{ backgroundColor: "rgba(24,24,27,0.6)", borderWidth: 1, borderColor: "rgba(39,39,42,0.8)", borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 }}>
-                            <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 0.5, color: CYAN }}>◈ {bio.deviceSource.slice(0, 20)}</Text>
-                          </View>
-                        )}
-                      </>
-                    ) : (
-                      <Text className="font-mono" style={{ fontSize: 8, letterSpacing: 0.5, color: SILVER }}>
-                        [ SIN REGISTRO TELEMÉTRICO ]
-                      </Text>
-                    )}
-                  </View>
-                </View>
-              </View>
-            );
-          })
-        )}
+        {/* ── 8 · Acceso encapsulado a la Bitácora Táctica (limpieza de UI)
+             — la lista de sesiones con BPM/KCAL vive ahora en su propio
+             modal (TelemetryLogModal), no en el scroll principal. ── */}
+        <View style={{ marginHorizontal: 20, marginTop: 24 }}>
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => { triggerImpact(); setShowTelemetry(true); }}
+            style={{ ...GLASS, width: "100%", borderRadius: 16, padding: 16, flexDirection: "row", alignItems: "center", gap: 12 }}
+          >
+            <Activity size={18} color={VOLT} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ ...athletic, fontSize: 13, color: "#fff" }}>Ver estadísticas de ritmo cardíaco</Text>
+              <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 0.5, color: SILVER, marginTop: 2 }}>
+                {bioLoading ? "Cargando..." : `${bioHistory.length} sesión${bioHistory.length === 1 ? "" : "es"} registrada${bioHistory.length === 1 ? "" : "s"}`}
+              </Text>
+            </View>
+            <Text style={{ fontSize: 14, color: SILVER }}>›</Text>
+          </TouchableOpacity>
+        </View>
 
         {/* ── 9 · Logout command latch — the ONLY session-destruction surface
             in the app; SALIR was purged from the tab dock entirely. ── */}
@@ -1047,7 +1218,7 @@ export default function PerfilScreen() {
       {/* ── JERARQUÍA Y RANGOS DE PODER drawer ── */}
       <Modal visible={showRankDrawer} transparent animationType="fade" onRequestClose={() => setShowRankDrawer(false)}>
         <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.92)" }}>
-          <ScrollView contentContainerStyle={{ padding: 24, paddingTop: 70, paddingBottom: 64 }} showsVerticalScrollIndicator={false}>
+          <ScrollView contentContainerStyle={{ padding: 24, paddingTop: insets.top + 24, paddingBottom: 64 }} showsVerticalScrollIndicator={false}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
               <View>
                 <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 2, color: SILVER }}>🏅 SISTEMA DE RANGO</Text>
@@ -1167,6 +1338,22 @@ export default function PerfilScreen() {
         avatarUrl={avatarUrl}
         token={token}
         onRefresh={refresh}
+      />
+
+      {/* ── VINCULAR CON UN COACH (Módulo 1 — mitad real de "UNIRME A UN COACH") ── */}
+      <CoachLinkModal
+        visible={showCoachLink}
+        onClose={() => setShowCoachLink(false)}
+        token={token}
+        onLinked={refresh}
+      />
+
+      {/* ── BITÁCORA TÁCTICA / telemetría de ritmo cardíaco (encapsulada) ── */}
+      <TelemetryLogModal
+        visible={showTelemetry}
+        onClose={() => setShowTelemetry(false)}
+        loading={bioLoading}
+        history={bioHistory}
       />
     </SafeAreaView>
   );

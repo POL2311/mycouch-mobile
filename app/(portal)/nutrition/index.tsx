@@ -1,24 +1,26 @@
 import {
-  View, Text, ScrollView, Pressable, ActivityIndicator, Modal,
+  View, Text, ScrollView, Pressable, TouchableOpacity, ActivityIndicator, Modal,
   ImageBackground, StyleSheet,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
 import { MotiView, AnimatePresence } from "moti";
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { Droplet, Check, ArrowLeftRight } from "lucide-react-native";
+import { Droplet, Check, ArrowLeftRight, Utensils, Plus } from "lucide-react-native";
 import { BlurView } from "expo-blur";
 import Animated, {
   useSharedValue, useAnimatedScrollHandler, useAnimatedStyle,
   interpolate, Extrapolation,
 } from "react-native-reanimated";
 import Svg, { Defs, LinearGradient, Stop, Rect, Polygon } from "react-native-svg";
-import { usePortal, resolveDietDay } from "@/lib/portal";
+import { usePortal, resolveDietDay, isSelfCoached } from "@/lib/portal";
+import { useSelfCoach } from "@/lib/selfCoach";
 import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
 import { triggerImpact, triggerSuccess } from "@/lib/haptics";
 import { ShimmerScreen } from "@/components/ShimmerLoader";
 import { tacticalSubHeader } from "@/lib/typography";
+import { TemplatePickerModal } from "@/components/portal/TemplatePickerModal";
 import type { Meal } from "@/lib/portal";
 
 // ── SF Dark Pro / Volt token registry (MYCOACH_GLOBAL_MASTER_SPEC §3.1) ──────
@@ -1458,7 +1460,23 @@ export default function NutritionTab() {
     }
   }, [token, checkedKeys, activeDate]);
 
-  const diet = detail?.diet;
+  // Módulo 2/3 — misma lógica que lib/workout.tsx para la rutina: si el
+  // coach nunca asignó dieta (detail.dietAssigned false) pero el alumno es
+  // auto-entrenador y eligió una plantilla local (lib/selfCoach.tsx), esa
+  // elección alimenta el mismo pipeline de checklist/macros real
+  // (POST /api/me/checks no valida contra ningún dietJson asignado). Un plan
+  // local jamás pisa una dieta real.
+  const { localDietBridge, applyDietTemplate } = useSelfCoach();
+  const dietAssigned = detail?.dietAssigned ?? ((detail?.diet?.meals?.length ?? 0) > 0);
+  const isSelfDietPlan = !dietAssigned && !!localDietBridge;
+  const diet = dietAssigned ? detail?.diet : (isSelfDietPlan ? localDietBridge : detail?.diet);
+  const selfCoachedStudent = isSelfCoached(student);
+  // Módulo 3 "PLAN ALIMENTICIO LIBRE": el coach existe pero solo asignó
+  // rutina. Módulo 2 "CARGAR MI DIETA": auto-entrenador sin dieta elegida.
+  const freeDietPlan  = !dietAssigned && !isSelfDietPlan && !selfCoachedStudent;
+  const needsDietPlan = !dietAssigned && !isSelfDietPlan && selfCoachedStudent;
+  const [showDietPicker, setShowDietPicker] = useState(false);
+
   // Per-day diet (diet.days present) resolves against the BROWSED day
   // (activeDay), not always literal today — so the shown kcal/macro targets
   // stay consistent with whichever day's meal-checks (fetched for
@@ -1623,7 +1641,54 @@ export default function NutritionTab() {
         {/* ── Hydration engine ── */}
         <HydrationRow totalMl={waterMl} syncing={waterBusy} onAdd={addWater} />
 
-        {meals.length === 0 && (
+        {/* Módulo 3 — el coach existe y asignó rutina, pero ninguna dieta:
+            sin bloques de macros/checklist incompletos, solo las metas
+            generales (hidratación arriba + un estimado de mantenimiento
+            declarado como tal, nunca presentado como objetivo del coach). */}
+        {freeDietPlan && (
+          <View
+            className="rounded-3xl py-8 px-6"
+            style={{ backgroundColor: "#1E1E1E", borderWidth: 1, borderColor: "rgba(204,255,0,0.15)", alignItems: "center", gap: 10 }}
+          >
+            <Utensils size={22} color={VOLT} strokeWidth={1.5} />
+            <Text style={{ fontWeight: "900", fontStyle: "italic", textTransform: "uppercase", fontSize: 15, color: "#fff", textAlign: "center", letterSpacing: -0.3 }}>
+              {"PLAN ALIMENTICIO LIBRE\n// CUMPLE TUS MACROS BASE"}
+            </Text>
+            <Text className="text-[12px] text-center" style={{ color: T_TERTIARY, lineHeight: 18 }}>
+              Tu coach enfocó tu plan en el entrenamiento. Mantén tu ingesta habitual — estimado de mantenimiento ≈ {Math.round((student?.currentWeight ?? 70) * 30)} kcal (fórmula general, no es un objetivo fijado por tu coach).
+            </Text>
+          </View>
+        )}
+
+        {/* Módulo 2 — auto-entrenador sin dieta elegida todavía. */}
+        {needsDietPlan && (
+          <View
+            className="rounded-3xl py-8 px-6"
+            style={{ backgroundColor: "#1E1E1E", borderWidth: 1, borderColor: "rgba(204,255,0,0.15)", alignItems: "center", gap: 12 }}
+          >
+            <Text style={{ fontWeight: "900", fontStyle: "italic", textTransform: "uppercase", fontSize: 15, color: "#fff", textAlign: "center" }}>
+              Modo auto-entrenador
+            </Text>
+            <Text className="text-[12px] text-center" style={{ color: T_TERTIARY, lineHeight: 18 }}>
+              No tienes coach vinculado — carga un plan del catálogo para empezar a registrar tus comidas hoy mismo.
+            </Text>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => { triggerImpact(); setShowDietPicker(true); }}
+              style={{
+                width: "100%", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+                backgroundColor: VOLT, borderRadius: 999, paddingVertical: 14,
+              }}
+            >
+              <Plus size={16} color="#000" />
+              <Text style={{ fontWeight: "900", fontStyle: "italic", textTransform: "uppercase", fontSize: 13, color: "#000" }}>CARGAR MI DIETA</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Fallback genérico — dieta real asignada pero sin comidas hoy
+            (dato del coach incompleto), distinto de "nunca hubo dieta". */}
+        {meals.length === 0 && !freeDietPlan && !needsDietPlan && (
           <View
             className="items-center justify-center rounded-3xl py-12 px-6"
             style={{ backgroundColor: "#1E1E1E", borderWidth: 1, borderColor: "rgba(255,255,255,0.05)" }}
@@ -1683,6 +1748,17 @@ export default function NutritionTab() {
             return next;
           });
           setSwapTarget(null);
+        }}
+      />
+
+      <TemplatePickerModal
+        visible={showDietPicker}
+        onClose={() => setShowDietPicker(false)}
+        type="diet"
+        onApply={async tpl => {
+          if (tpl.type !== "diet") return;
+          await applyDietTemplate(tpl);
+          triggerSuccess();
         }}
       />
     </SafeAreaView>

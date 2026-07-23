@@ -1,7 +1,7 @@
 import {
   View, Text, TextInput, TouchableOpacity, Pressable, FlatList, Modal, Image, KeyboardAvoidingView, Platform,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MotiView } from "moti";
 import { useState, useEffect, useCallback, useRef } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -154,6 +154,7 @@ export default function SalasChatScreen() {
   const { student } = usePortal();
   const { addXP, currentRank } = useGamification();
   const listRef = useRef<FlatList<ChatMsg>>(null);
+  const insets = useSafeAreaInsets();
 
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState("");
@@ -428,7 +429,7 @@ export default function SalasChatScreen() {
 
       {/* Head-to-head — se abre al aceptar el reto de otro miembro */}
       <Modal visible={!!headToHead} transparent animationType="slide" onRequestClose={() => setHeadToHead(null)}>
-        <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.96)", padding: 24, paddingTop: 70 }}>
+        <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.96)", padding: 24, paddingTop: insets.top + 24 }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
             <Text className="font-mono" style={{ fontSize: 10, letterSpacing: 1.5, color: SILVER }}>PAREO TÁCTICO 1V1</Text>
             <TouchableOpacity activeOpacity={0.7} onPress={() => setHeadToHead(null)} style={{ borderWidth: 1, borderColor: VOLT, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 6 }}>
