@@ -19,6 +19,7 @@ import { useSelfCoach } from "@/lib/selfCoach";
 import { useGamification } from "@/lib/gamification";
 import { useMotivation } from "@/lib/motivation";
 import { triggerImpact, triggerSuccess } from "@/lib/haptics";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 import { VOLT, WATER_TARGET_ML, WATER_DOSE_ML } from "@/components/workout-ui";
 import { TemplatePickerModal } from "@/components/portal/TemplatePickerModal";
 
@@ -81,7 +82,7 @@ const athletic = { fontWeight: "900" as const, fontStyle: "italic" as const, tex
 // sets, biometrics, timers) comes from useWorkout(). ─────────────────────────
 export default function WorkoutTab() {
   const insets = useSafeAreaInsets();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const {
     exercises, dayFocus, semanaLabel, totalEx, hasAssignment, hasAnyRoutine, isLoading,
     lifecycle, setLifecycle, watchStatus, doneSets, doneEx, biometrics,
@@ -238,6 +239,13 @@ export default function WorkoutTab() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: showLatch ? 190 : 160 }}
       >
+        {/* User Profile Header */}
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: GUTTER, marginTop: 12 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <UserAvatar image={user?.image} name={user?.name} size={36} />
+            <Text style={{ fontSize: 13, fontWeight: "800", color: "#fff" }}>HOLA, {user?.name?.split(" ")[0] || "ATLETA"}</Text>
+          </View>
+        </View>
 
         {/* ── 1 · Informational header & live pause status stack ── */}
         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: GUTTER, marginTop: 12 }}>

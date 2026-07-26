@@ -49,7 +49,7 @@ const NO_DOCK_SCREENS = new Set(["success", "[id]"]);
 // ── Master floor dock — flat frame anchored to the viewport floor. The
 // ACTIVE route morphs into the floating volt sphere that breaks out of the
 // bar, while inactive slots stay flat outline glyphs.
-function LuxuryDock({ state, navigation }: BottomTabBarProps) {
+function LuxuryDock({ state, navigation, descriptors }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
 
   // Salas is a fully immersive experience end-to-end (feed + chat) — the dock
@@ -59,6 +59,11 @@ function LuxuryDock({ state, navigation }: BottomTabBarProps) {
   // of the dock for this exact reason.
   const focusedRoute = state.routes[state.index];
   if (focusedRoute?.name === "salas") return null;
+
+  // Respect tabBarStyle: { display: 'none' } from the screen options.
+  const { options } = descriptors[focusedRoute.key];
+  // @ts-ignore - tabBarStyle may not be perfectly typed for custom docks but it's passed in options
+  if (options.tabBarStyle?.display === "none") return null;
 
   // Look one level down into the focused tab's own nested navigator (if it
   // has one) to find which sub-screen is actually on screen right now.
@@ -180,8 +185,8 @@ export default function PortalLayout() {
           <Tabs.Screen name="salas" />
           <Tabs.Screen name="perfil/index" />
           {/* Hidden routes — pushed from their respective flows, off the dock */}
-          <Tabs.Screen name="exercise" options={{ href: null }} />
-          <Tabs.Screen name="workout" options={{ href: null }} />
+          <Tabs.Screen name="exercise" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+          <Tabs.Screen name="workout" options={{ href: null, tabBarStyle: { display: 'none' } }} />
         </Tabs>
         {/* Mount-once celebration overlay — RN <Modal> renders in its own
             native layer above the tab dock regardless of tree position, so

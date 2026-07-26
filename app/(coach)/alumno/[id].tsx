@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { View, Text, ScrollView, Pressable, TouchableOpacity, ActivityIndicator, Modal } from "react-native";
+import { View, Text, ScrollView, Pressable, TouchableOpacity, ActivityIndicator, Modal, Alert } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { router, useLocalSearchParams } from "expo-router";
-import { ChevronLeft, AlertTriangle, Check, X as XIcon, Plus, ClipboardList, Eye } from "lucide-react-native";
+import { router, useLocalSearchParams, useFocusEffect, useNavigation } from "expo-router";
+import { ChevronLeft, AlertTriangle, Check, X as XIcon, Plus, ClipboardList, Eye, Camera, Trophy, Heart, Flame, Footprints, Battery, Moon, Activity, Calendar } from "lucide-react-native";
 import Svg, { Polyline, Circle } from "react-native-svg";
 import { useAuth } from "@/lib/session";
 import { ApiError } from "@/lib/api";
@@ -22,6 +22,10 @@ import ChangeStageModal from "@/components/coach/ChangeStageModal";
 import AssignDietModal from "@/components/coach/AssignDietModal";
 import DietTemplateCatalogModal from "@/components/coach/DietTemplateCatalogModal";
 import AssignRoutineModal from "@/components/coach/AssignRoutineModal";
+import { ExerciseVideoPlayer } from "@/components/ExerciseVideoPlayer";
+import { UserAvatar } from "@/components/ui/UserAvatar";
+import ProgressGallery from "@/components/coach/ProgressGallery";
+import { NutritionDisclaimerModal } from "@/components/ui/NutritionDisclaimerModal";
 
 const CARD = { backgroundColor: COACH_CARD, borderWidth: 1, borderColor: COACH_BORDER } as const;
 const athletic = { fontWeight: "900" as const, fontStyle: "italic" as const, textTransform: "uppercase" as const };
@@ -292,18 +296,18 @@ function ReadOnlyPlanModal({ visible, onClose, title, subtitle, children }: {
 }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.96)", paddingTop: 70 }}>
+      <View style={{ flex: 1, backgroundColor: "#f4f4f5", paddingTop: 70 }}>
         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", paddingHorizontal: 20, marginBottom: 18 }}>
           <View style={{ flex: 1, paddingRight: 12 }}>
-            <Text style={{ ...athletic, fontSize: 18, color: "#fff" }}>{title}</Text>
+            <Text style={{ ...athletic, fontSize: 18, color: "#18181b" }}>{title}</Text>
             {!!subtitle && (
-              <Text className="font-mono" style={{ fontSize: 10, color: COACH_MUTED, marginTop: 4, letterSpacing: 0.5 }}>
+              <Text className="font-mono" style={{ fontSize: 10, color: "#71717a", marginTop: 4, letterSpacing: 0.5 }}>
                 {subtitle}
               </Text>
             )}
           </View>
           <TouchableOpacity activeOpacity={0.7} onPress={onClose} hitSlop={10}>
-            <XIcon size={22} color={COACH_MUTED} />
+            <XIcon size={22} color="#71717a" />
           </TouchableOpacity>
         </View>
         <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60 }} showsVerticalScrollIndicator={false}>
@@ -314,30 +318,23 @@ function ReadOnlyPlanModal({ visible, onClose, title, subtitle, children }: {
   );
 }
 
-// Botón secundario de contorno neón — mismo tratamiento visual que "Cargar
-// Plantilla de Alimentación", reutilizado aquí para abrir el modal de solo
-// lectura.
-function ViewPlanButton({ label, onPress }: { label: string; onPress: () => void }) {
-  return (
-    <TouchableOpacity
-      activeOpacity={0.85}
-      onPress={() => { triggerImpact(); onPress(); }}
-      style={{
-        height: 44, borderRadius: 12, marginTop: 10, borderWidth: 1, borderColor: COACH_ACCENT,
-        flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-      }}
-    >
-      <Eye size={14} color={COACH_ACCENT} />
-      <Text className="font-bold" style={{ fontSize: 11, color: COACH_ACCENT, letterSpacing: 0.3 }}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
 
 export default function AlumnoDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { token } = useAuth();
   const { students, refresh, patchStudent } = useCoach();
   const student = students.find(s => s.id === id);
+  const navigation = useNavigation();
+  useFocusEffect(
+    useCallback(() => {
+      const parent = navigation.getParent();
+      parent?.setOptions({ tabBarStyle: { display: 'none' } });
+      return () => {
+        parent?.setOptions({ tabBarStyle: undefined });
+      };
+    }, [navigation])
+  );
+
   const [tab, setTab] = useState<TabId>("resumen");
   const [toggling, setToggling] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
@@ -345,8 +342,6 @@ export default function AlumnoDetailScreen() {
   const [assignDietOpen, setAssignDietOpen] = useState(false);
   const [dietCatalogOpen, setDietCatalogOpen] = useState(false);
   const [changeStageOpen, setChangeStageOpen] = useState(false);
-  const [routineViewOpen, setRoutineViewOpen] = useState(false);
-  const [dietViewOpen, setDietViewOpen] = useState(false);
   const [selectedDia, setSelectedDia] = useState<DiaSemana>(diaSemanaDeHoy());
   // Aterriza en la semana que el alumno está viviendo hoy según fechaInicio —
   // requiere parsear routineJson una vez antes del early-return de abajo
@@ -482,19 +477,14 @@ export default function AlumnoDetailScreen() {
       <View style={{ paddingHorizontal: 20 }}>
         {/* ── Identity ── */}
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-          <View
-            style={{
-              width: 52, height: 52, borderRadius: 26, alignItems: "center", justifyContent: "center",
-              backgroundColor: student.avatarColor || stageColor,
-              ...(student.isActive
-                ? { borderWidth: 2, borderColor: COACH_GOLD, shadowColor: COACH_GOLD, shadowOpacity: 0.5, shadowRadius: 6, shadowOffset: { width: 0, height: 0 } }
-                : { opacity: 0.5 }),
-            }}
-          >
-            <Text className="font-black" style={{ fontSize: 18, color: "#000" }}>
-              {student.avatarInitials || student.name.trim().split(/\s+/).map(w => w[0]).slice(0, 2).join("").toUpperCase()}
-            </Text>
-          </View>
+          <UserAvatar 
+            image={student.avatarUrl || null} 
+            name={student.name} 
+            size={52} 
+            initials={student.avatarInitials} 
+            color={student.avatarColor || stageColor} 
+            isActive={student.isActive} 
+          />
           <View style={{ flex: 1 }}>
             <Text style={{ ...athletic, fontSize: 22, color: "#fff", letterSpacing: -0.5 }} numberOfLines={1}>
               {student.name}
@@ -640,68 +630,68 @@ export default function AlumnoDetailScreen() {
             <WeekdayBar selected={selectedDia} onSelect={setSelectedDia} filled={diasConEjercicios} />
 
             {rutinaUnassigned ? (
-              <TouchableOpacity
-                activeOpacity={0.85}
-                onPress={() => setAssignRoutineOpen(true)}
-                style={{
-                  height: 52, borderRadius: 16, backgroundColor: COACH_ACCENT, marginTop: 10,
-                  flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-                }}
-              >
-                <Plus size={16} color="#000" strokeWidth={2.5} />
-                <Text style={{ ...athletic, fontSize: 13, color: "#000" }}>Asignar rutina</Text>
-              </TouchableOpacity>
+              <View style={{ ...CARD, borderRadius: 16, padding: 24, marginTop: 10, alignItems: "center" }}>
+                <Text style={{ fontSize: 13, color: COACH_MUTED, marginBottom: 20 }}>Sin rutina asignada para este día.</Text>
+                <View style={{ width: "100%", gap: 10 }}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => setChangeStageOpen(true)}
+                    style={{
+                      height: 52, borderRadius: 16, backgroundColor: COACH_ACCENT,
+                      flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+                    }}
+                  >
+                    <ClipboardList size={16} color="#000" />
+                    <Text style={{ ...athletic, fontSize: 13, color: "#000" }}>Usar Plantilla</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => setAssignRoutineOpen(true)}
+                    style={{
+                      height: 52, borderRadius: 16, borderWidth: 1, borderColor: COACH_ACCENT,
+                      flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+                    }}
+                  >
+                    <Plus size={16} color={COACH_ACCENT} />
+                    <Text style={{ ...athletic, fontSize: 13, color: COACH_ACCENT }}>Crear Nuevo Plan</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             ) : (
               <View style={{ ...CARD, borderRadius: 16, padding: 16, marginTop: 10 }}>
                 <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <View style={{ flex: 1 }}>
-                    <Text className="font-black" style={{ fontSize: 14, color: "#fff" }}>{rutina.nombre}</Text>
-                    <Text className="font-mono" style={{ fontSize: 10, color: COACH_MUTED, marginTop: 2 }}>
-                      {DIA_LABEL[selectedDia]} · {diaCfgRutina?.enfoque || "Descanso"}
+                  <View style={{ flex: 1, paddingRight: 10 }}>
+                    <Text className="font-black" style={{ fontSize: 16, color: "#fff" }}>{rutina.nombre}</Text>
+                    <Text className="font-mono" style={{ fontSize: 11, color: COACH_MUTED, marginTop: 4 }}>
+                      Semana {selectedSemana} • {DIA_LABEL[selectedDia]}{diaCfgRutina?.enfoque ? `: ${diaCfgRutina.enfoque}` : ""}
                     </Text>
                   </View>
-                  <TouchableOpacity onPress={() => setAssignRoutineOpen(true)} hitSlop={8}>
-                    <Text style={{ fontSize: 11, color: COACH_ACCENT, fontWeight: "800" }}>Editar</Text>
+                  <TouchableOpacity 
+                    onPress={() => setAssignRoutineOpen(true)}
+                    style={{ backgroundColor: "#1C1C1E", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: COACH_BORDER }}
+                  >
+                    <Text style={{ fontSize: 10, color: COACH_MUTED, fontWeight: "600" }}>✏️ Cambiar o Editar</Text>
                   </TouchableOpacity>
                 </View>
+
                 {!diaCfgRutina || diaCfgRutina.ejercicios.length === 0 ? (
-                  <Text style={{ fontSize: 12, color: COACH_MUTED, marginTop: 10 }}>Día de descanso — sin ejercicios.</Text>
+                  <Text style={{ fontSize: 12, color: COACH_MUTED, marginTop: 12 }}>Día de descanso — sin ejercicios.</Text>
                 ) : (
-                  diaCfgRutina.ejercicios.map((ej, i) => (
-                    <View
-                      key={ej.id}
-                      style={{ paddingVertical: 8, borderTopWidth: i > 0 ? 1 : 0, borderTopColor: COACH_BORDER, marginTop: i > 0 ? 4 : 10 }}
-                    >
-                      <Text style={{ fontSize: 12, fontWeight: "700", color: "#fff" }}>{ej.nombre}</Text>
-                      <Text className="font-mono" style={{ fontSize: 10, color: COACH_MUTED, marginTop: 1 }}>
-                        {ej.series.length} series
-                        {ej.series.some(s => s.minWeight > 0 || s.targetReps > 0) && (
-                          <Text style={{ color: COACH_ACCENT }}>
-                            {" · mín. "}{Math.max(...ej.series.map(s => s.minWeight))}kg · obj. {Math.max(...ej.series.map(s => s.targetReps))} reps
-                          </Text>
-                        )}
-                      </Text>
-                    </View>
-                  ))
+                  <View style={{ marginTop: 16, gap: 6 }}>
+                    {diaCfgRutina.ejercicios.map(ej => {
+                      const seriesResumen = `${ej.series.length}x${ej.series.map(s => s.targetReps).join(",")}`;
+                      return (
+                        <View key={ej.id} style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.05)", paddingBottom: 6 }}>
+                          <Text style={{ fontSize: 13, color: "#d4d4d8", flex: 1, paddingRight: 10 }}>{ej.nombre}</Text>
+                          <Text className="font-mono" style={{ fontSize: 11, color: COACH_ACCENT }}>{seriesResumen}</Text>
+                        </View>
+                      );
+                    })}
+                  </View>
                 )}
               </View>
             )}
 
-            {!rutinaUnassigned && (
-              <ViewPlanButton label="👁️ Ver Rutina Actual" onPress={() => setRoutineViewOpen(true)} />
-            )}
-
-            {/* ChangeStageModal ya no aplica plantillas de dieta/rutina (se
-                simplificó a un asignador rápido de solo etapa/número/fecha —
-                ese flujo completo con plantillas vive en
-                BulkPeriodizationWizard para asignación masiva), así que ya
-                no puede pisar en silencio una rutina estricta al usarse — el
-                aviso de colisión que vivía aquí quedó sin caso real y se quitó. */}
-            <TouchableOpacity onPress={() => setChangeStageOpen(true)} style={{ marginTop: 12, alignItems: "center" }}>
-              <Text style={{ fontSize: 11, color: COACH_MUTED, textDecorationLine: "underline" }}>
-                Cambiar etapa
-              </Text>
-            </TouchableOpacity>
 
             <SectionLabel>Récords personales</SectionLabel>
             {/* Student.prSquat/prDeadlift/prBench are single current-best
@@ -738,62 +728,72 @@ export default function AlumnoDetailScreen() {
             <WeekdayBar selected={selectedDia} onSelect={setSelectedDia} filled={diasConComidas} />
 
             {dietUnassigned ? (
-              <TouchableOpacity
-                activeOpacity={0.85}
-                onPress={() => setAssignDietOpen(true)}
-                style={{
-                  height: 52, borderRadius: 16, backgroundColor: COACH_ACCENT, marginTop: 10,
-                  flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-                }}
-              >
-                <Plus size={16} color="#000" strokeWidth={2.5} />
-                <Text style={{ ...athletic, fontSize: 13, color: "#000" }}>+ Asignar dieta</Text>
-              </TouchableOpacity>
+              <View style={{ ...CARD, borderRadius: 16, padding: 24, marginTop: 10, alignItems: "center" }}>
+                <Text style={{ fontSize: 13, color: COACH_MUTED, marginBottom: 20 }}>Sin dieta asignada para este día.</Text>
+                <View style={{ width: "100%", gap: 10 }}>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => setDietCatalogOpen(true)}
+                    style={{
+                      height: 52, borderRadius: 16, backgroundColor: COACH_ACCENT,
+                      flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+                    }}
+                  >
+                    <ClipboardList size={16} color="#000" />
+                    <Text style={{ ...athletic, fontSize: 13, color: "#000" }}>Usar Plantilla de Alimentación</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => setAssignDietOpen(true)}
+                    style={{
+                      height: 52, borderRadius: 16, borderWidth: 1, borderColor: COACH_ACCENT,
+                      flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+                    }}
+                  >
+                    <Plus size={16} color={COACH_ACCENT} />
+                    <Text style={{ ...athletic, fontSize: 13, color: COACH_ACCENT }}>Asignar Dieta Personalizada</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
             ) : (
               <View style={{ ...CARD, borderRadius: 16, padding: 16, marginTop: 10 }}>
                 <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <View style={{ flex: 1 }}>
-                    <Text className="font-black" style={{ fontSize: 14, color: "#fff" }}>{dieta.nombre}</Text>
-                    <Text className="font-mono" style={{ fontSize: 10, color: COACH_MUTED, marginTop: 2 }}>{DIA_LABEL[selectedDia]}</Text>
+                  <View style={{ flex: 1, paddingRight: 10 }}>
+                    <Text className="font-black" style={{ fontSize: 16, color: "#fff" }}>{dieta.nombre}</Text>
+                    <Text className="font-mono" style={{ fontSize: 11, color: COACH_MUTED, marginTop: 4 }}>{DIA_LABEL[selectedDia]}</Text>
                   </View>
-                  <TouchableOpacity onPress={() => setAssignDietOpen(true)} hitSlop={8}>
-                    <Text style={{ fontSize: 11, color: COACH_ACCENT, fontWeight: "800" }}>Editar</Text>
+                  <TouchableOpacity 
+                    onPress={() => setAssignDietOpen(true)}
+                    style={{ backgroundColor: "#1C1C1E", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: COACH_BORDER }}
+                  >
+                    <Text style={{ fontSize: 10, color: COACH_MUTED, fontWeight: "600" }}>✏️ Cambiar o Editar</Text>
                   </TouchableOpacity>
                 </View>
+
                 {!diaCfgDieta || diaCfgDieta.comidas.length === 0 ? (
-                  <Text style={{ fontSize: 12, color: COACH_MUTED, marginTop: 10 }}>Sin comidas asignadas este día.</Text>
+                  <Text style={{ fontSize: 12, color: COACH_MUTED, marginTop: 12 }}>Sin comidas asignadas este día.</Text>
                 ) : (
-                  <Text className="font-mono" style={{ fontSize: 10, color: COACH_MUTED, marginTop: 8 }}>
-                    {diaCfgDieta.comidas.length} COMIDAS
-                  </Text>
+                  <View style={{ marginTop: 16, gap: 12 }}>
+                    <MacroRingsRow macros={diaCfgDieta.macros} kcalObjetivo={diaCfgDieta.kcalObjetivo} />
+                    <View style={{ marginTop: 4, gap: 8 }}>
+                      {diaCfgDieta.comidas.map((c, i) => {
+                        // Resumen de ítems: "4 huevos enteros + 80g avena"
+                        const summary = c.descripcion.split("\n").map(l => l.trim()).filter(Boolean).join(" + ");
+                        return (
+                          <View key={c.id} style={{ backgroundColor: "#1C1C1E", borderRadius: 10, padding: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.05)" }}>
+                            <Text style={{ fontWeight: "800", color: "#fff", fontSize: 13 }}>{c.nombre}</Text>
+                            {summary ? (
+                              <Text style={{ color: COACH_MUTED, fontSize: 12, marginTop: 4, lineHeight: 18 }}>{summary}</Text>
+                            ) : null}
+                          </View>
+                        );
+                      })}
+                    </View>
+                  </View>
                 )}
               </View>
             )}
 
-            {/* Control visual del plan — anillos de macros del día seleccionado
-                (Módulo "Visualización Intuitiva"), reemplaza la fila de texto
-                plano P/C/G anterior. */}
-            {!dietUnassigned && diaCfgDieta && diaCfgDieta.comidas.length > 0 && (
-              <MacroRingsRow macros={diaCfgDieta.macros} kcalObjetivo={diaCfgDieta.kcalObjetivo} />
-            )}
-
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() => setDietCatalogOpen(true)}
-              style={{
-                height: 44, borderRadius: 12, marginTop: 10, borderWidth: 1, borderColor: COACH_ACCENT,
-                flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-              }}
-            >
-              <ClipboardList size={14} color={COACH_ACCENT} />
-              <Text className="font-bold" style={{ fontSize: 11, color: COACH_ACCENT, letterSpacing: 0.3 }}>
-                Cargar Plantilla de Alimentación
-              </Text>
-            </TouchableOpacity>
-
-            {!dietUnassigned && diaCfgDieta && diaCfgDieta.comidas.length > 0 && (
-              <ViewPlanButton label="👁️ Ver Dieta Actual" onPress={() => setDietViewOpen(true)} />
-            )}
 
             {/* Vista mensual de carga — control visual de qué días del mes ya
                 tienen contenido programado; tocar una celda salta a ese día
@@ -846,55 +846,110 @@ export default function AlumnoDetailScreen() {
                 <Text style={{ fontSize: 12, color: COACH_MUTED }}>No se pudo cargar el checklist de hoy. Desliza hacia abajo para reintentar.</Text>
               </View>
             )}
+
+            <NutritionDisclaimerModal buttonStyle={{ backgroundColor: "#1C1C1E", borderColor: COACH_BORDER }} />
           </>
         )}
 
         {tab === "progreso" && (
           <>
-            <SectionLabel>Peso histórico</SectionLabel>
-            {detailLoading ? (
-              <View style={{ ...CARD, borderRadius: 16, padding: 24, alignItems: "center" }}>
-                <ActivityIndicator color={COACH_ACCENT} />
-              </View>
-            ) : detail && detail.weightHistory.length > 0 ? (
-              <WeightHistoryChart points={detail.weightHistory} />
-            ) : (
-              <View style={{ ...CARD, borderRadius: 16, padding: 16 }}>
-                <Text style={{ fontSize: 12, color: COACH_MUTED }}>No se pudo cargar el historial de peso. Desliza hacia abajo para reintentar.</Text>
-              </View>
-            )}
+            <SectionLabel>Galería de Avances</SectionLabel>
+            <ProgressGallery />
 
-            <SectionLabel>Medidas corporales</SectionLabel>
-            {detailLoading ? (
-              <View style={{ ...CARD, borderRadius: 16, padding: 24, alignItems: "center" }}>
-                <ActivityIndicator color={COACH_ACCENT} />
-              </View>
-            ) : detail && detail.measurements.length > 0 ? (
-              <View style={{ ...CARD, borderRadius: 16, padding: 16 }}>
-                <View style={{ flexDirection: "row", marginBottom: 6 }}>
-                  <Text className="font-mono" style={{ flex: 1.4, fontSize: 9, color: COACH_MUTED, textTransform: "uppercase" }}>Fecha</Text>
-                  <Text className="font-mono" style={{ flex: 1, fontSize: 9, color: COACH_MUTED, textTransform: "uppercase", textAlign: "center" }}>Pecho</Text>
-                  <Text className="font-mono" style={{ flex: 1, fontSize: 9, color: COACH_MUTED, textTransform: "uppercase", textAlign: "center" }}>Cintura</Text>
-                  <Text className="font-mono" style={{ flex: 1, fontSize: 9, color: COACH_MUTED, textTransform: "uppercase", textAlign: "center" }}>Cadera</Text>
-                  <Text className="font-mono" style={{ flex: 1, fontSize: 9, color: COACH_MUTED, textTransform: "uppercase", textAlign: "center" }}>Brazos</Text>
-                  <Text className="font-mono" style={{ flex: 1, fontSize: 9, color: COACH_MUTED, textTransform: "uppercase", textAlign: "center" }}>Piernas</Text>
-                </View>
-                {detail.measurements.map((m, i) => (
-                  <View key={i} style={{ flexDirection: "row", paddingVertical: 6, borderTopWidth: 1, borderTopColor: COACH_BORDER }}>
-                    <Text style={{ flex: 1.4, fontSize: 11, color: "#fff" }}>{m.date}</Text>
-                    <Text style={{ flex: 1, fontSize: 11, color: COACH_MUTED, textAlign: "center" }}>{m.chest}</Text>
-                    <Text style={{ flex: 1, fontSize: 11, color: COACH_MUTED, textAlign: "center" }}>{m.waist}</Text>
-                    <Text style={{ flex: 1, fontSize: 11, color: COACH_MUTED, textAlign: "center" }}>{m.hips}</Text>
-                    <Text style={{ flex: 1, fontSize: 11, color: COACH_MUTED, textAlign: "center" }}>{m.armL}/{m.armR}</Text>
-                    <Text style={{ flex: 1, fontSize: 11, color: COACH_MUTED, textAlign: "center" }}>{m.thighL}/{m.thighR}</Text>
+            {/* 2. LOGS DE ENTRENAMIENTO & PRs */}
+            <SectionLabel>Logs de Entrenamiento & PRs</SectionLabel>
+            <View style={{ ...CARD, borderRadius: 16, padding: 16 }}>
+              <View style={{ borderBottomWidth: 1, borderBottomColor: COACH_BORDER, paddingBottom: 12, marginBottom: 12 }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <Text style={{ fontSize: 14, color: "#fff", fontWeight: "700" }}>Pecho y Tríceps</Text>
+                  <View style={{ backgroundColor: "rgba(204, 255, 0, 0.15)", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: COACH_ACCENT, flexDirection: "row", alignItems: "center", gap: 4 }}>
+                    <Trophy size={10} color={COACH_ACCENT} />
+                    <Text style={{ fontSize: 9, color: COACH_ACCENT, fontWeight: "800" }}>NUEVO PR</Text>
                   </View>
-                ))}
+                </View>
+                <Text style={{ fontSize: 11, color: COACH_MUTED }}>Ayer · Duración: 52 min</Text>
+                <View style={{ marginTop: 8, backgroundColor: "#1C1C1E", padding: 10, borderRadius: 8 }}>
+                  <Text style={{ fontSize: 12, color: "#fff", fontWeight: "600" }}>Press Banca <Text style={{ color: COACH_ACCENT }}>100kg x 5</Text></Text>
+                  <Text style={{ fontSize: 11, color: COACH_MUTED, marginTop: 2 }}>Asignado: 4x8 @ 80kg • RPE: 9</Text>
+                </View>
               </View>
-            ) : (
-              <View style={{ ...CARD, borderRadius: 16, padding: 16 }}>
-                <Text style={{ fontSize: 12, color: COACH_MUTED }}>Aún no hay medidas corporales registradas para este alumno.</Text>
+              <View>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <Text style={{ fontSize: 14, color: "#fff", fontWeight: "700" }}>Día de Pierna (Cuádriceps)</Text>
+                </View>
+                <Text style={{ fontSize: 11, color: COACH_MUTED }}>Hace 3 días · Duración: 65 min</Text>
+                <View style={{ marginTop: 8, backgroundColor: "#1C1C1E", padding: 10, borderRadius: 8 }}>
+                  <Text style={{ fontSize: 12, color: "#fff", fontWeight: "600" }}>Sentadilla Libre <Text style={{ color: "#d4d4d8" }}>120kg x 8</Text></Text>
+                  <Text style={{ fontSize: 11, color: COACH_MUTED, marginTop: 2 }}>Asignado: 4x8-10 @ 120kg • RPE: 8</Text>
+                </View>
               </View>
-            )}
+            </View>
+
+            {/* 3. BIOMÉTRICOS */}
+            <SectionLabel>Biométricos (Promedios Semanales)</SectionLabel>
+            <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
+              <View style={{ ...CARD, flex: 1, borderRadius: 16, padding: 12 }}>
+                <Heart size={18} color="#ef4444" style={{ marginBottom: 8 }} />
+                <Text style={{ fontSize: 20, color: "#fff", fontWeight: "800" }}>62 <Text style={{ fontSize: 11, color: COACH_MUTED }}>bpm</Text></Text>
+                <Text style={{ fontSize: 10, color: COACH_MUTED, marginTop: 2 }}>Frecuencia en Reposo</Text>
+              </View>
+              <View style={{ ...CARD, flex: 1, borderRadius: 16, padding: 12 }}>
+                <Flame size={18} color="#f97316" style={{ marginBottom: 8 }} />
+                <Text style={{ fontSize: 20, color: "#fff", fontWeight: "800" }}>2,850 <Text style={{ fontSize: 11, color: COACH_MUTED }}>kcal</Text></Text>
+                <Text style={{ fontSize: 10, color: COACH_MUTED, marginTop: 2 }}>Gasto Diario Estimado</Text>
+              </View>
+            </View>
+            <View style={{ ...CARD, borderRadius: 16, padding: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <View>
+                <Text style={{ fontSize: 22, color: "#fff", fontWeight: "800" }}>8,420</Text>
+                <Text style={{ fontSize: 11, color: COACH_MUTED, marginTop: 2 }}>Promedio de Pasos Diarios (NEAT)</Text>
+              </View>
+              <Footprints size={28} color={COACH_ACCENT} opacity={0.8} />
+            </View>
+
+            {/* 4. CARGA Y RENDIMIENTO */}
+            <SectionLabel>Carga & Cumplimiento</SectionLabel>
+            <View style={{ ...CARD, borderRadius: 16, padding: 16 }}>
+              {/* RPE Alert */}
+              <View style={{ backgroundColor: "rgba(239, 68, 68, 0.1)", borderRadius: 12, padding: 12, borderWidth: 1, borderColor: "rgba(239, 68, 68, 0.3)", flexDirection: "row", alignItems: "flex-start", gap: 10, marginBottom: 16 }}>
+                <AlertTriangle size={16} color="#ef4444" style={{ marginTop: 2 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 12, color: "#ef4444", fontWeight: "700" }}>Alerta de Sobrecarga (RPE Promedio: 9.2)</Text>
+                  <Text style={{ fontSize: 11, color: "rgba(239, 68, 68, 0.8)", marginTop: 2, lineHeight: 16 }}>El alumno ha reportado un esfuerzo muy alto consistentemente. Sugerir una semana de descarga (Deload) pronto.</Text>
+                </View>
+              </View>
+
+              {/* Volumen */}
+              <View style={{ marginBottom: 12 }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
+                  <Text style={{ fontSize: 12, color: "#d4d4d8", fontWeight: "600" }}>Volumen Semanal (Series Efectivas)</Text>
+                  <Text style={{ fontSize: 12, color: COACH_ACCENT, fontWeight: "700" }}>64 / 70</Text>
+                </View>
+                <View style={{ height: 6, backgroundColor: "#1C1C1E", borderRadius: 3, overflow: "hidden" }}>
+                  <View style={{ width: "91%", height: "100%", backgroundColor: COACH_ACCENT }} />
+                </View>
+              </View>
+
+              {/* Nutrición */}
+              <View style={{ marginBottom: 12 }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
+                  <Text style={{ fontSize: 12, color: "#d4d4d8", fontWeight: "600" }}>Cumplimiento de Dieta (Mensual)</Text>
+                  <Text style={{ fontSize: 12, color: "#4ade80", fontWeight: "700" }}>85%</Text>
+                </View>
+                <View style={{ height: 6, backgroundColor: "#1C1C1E", borderRadius: 3, overflow: "hidden" }}>
+                  <View style={{ width: "85%", height: "100%", backgroundColor: "#4ade80" }} />
+                </View>
+              </View>
+              
+              {/* Sueño */}
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 4 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <Moon size={14} color="#60a5fa" />
+                  <Text style={{ fontSize: 12, color: "#d4d4d8", fontWeight: "600" }}>Calidad de Sueño</Text>
+                </View>
+                <Text style={{ fontSize: 12, color: "#fff", fontWeight: "700" }}>6.5 hrs <Text style={{ color: COACH_MUTED, fontWeight: "400" }}>(Subóptimo)</Text></Text>
+              </View>
+            </View>
           </>
         )}
       </ScrollView>
@@ -954,150 +1009,7 @@ export default function AlumnoDetailScreen() {
         }}
       />
 
-      {/* ── Inspección de solo lectura — lectura instantánea sin editor ── */}
-      <ReadOnlyPlanModal
-        visible={routineViewOpen}
-        onClose={() => setRoutineViewOpen(false)}
-        title="Rutina actual"
-        subtitle={`Semana ${selectedSemana} · ${DIA_LABEL[selectedDia]} · ${diaCfgRutina?.enfoque || "Descanso"}`}
-      >
-        {!diaCfgRutina || diaCfgRutina.ejercicios.length === 0 ? (
-          <Text style={{ fontSize: 13, color: COACH_MUTED, textAlign: "center", marginTop: 40 }}>
-            Día de descanso — sin ejercicios programados.
-          </Text>
-        ) : (
-          diaCfgRutina.ejercicios.map(ej => {
-            // Resumen de pirámide — "3x12,8,6" — condensa la misma lista de
-            // series que ya se desglosa abajo fila por fila, para una
-            // lectura instantánea del patrón antes de entrar al detalle.
-            const piramide = `${ej.series.length}x${ej.series.map(s => s.targetReps).join(",")}`;
-            return (
-              <View key={ej.id} style={{ ...CARD, borderRadius: 14, padding: 14, marginBottom: 10 }}>
-                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <View style={{ flex: 1, paddingRight: 8 }}>
-                    <Text className="font-black" style={{ fontSize: 14, color: "#fff" }}>{ej.nombre}</Text>
-                    {!!ej.grupoMuscular && (
-                      <Text className="font-mono" style={{ fontSize: 9, color: COACH_MUTED, marginTop: 2 }}>{ej.grupoMuscular}</Text>
-                    )}
-                  </View>
-                  <View style={{ alignItems: "flex-end" }}>
-                    <Text className="font-black" style={{ fontSize: 13, color: COACH_ACCENT }}>{piramide}</Text>
-                    {!!ej.descanso && (
-                      <Text className="font-mono" style={{ fontSize: 9, color: COACH_MUTED, marginTop: 1 }}>
-                        Descanso {ej.descanso}
-                      </Text>
-                    )}
-                  </View>
-                </View>
-                <View style={{ marginTop: 10, gap: 6 }}>
-                  {ej.series.map(s => (
-                    <View
-                      key={s.numero}
-                      style={{
-                        flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-                        backgroundColor: "rgba(255,255,255,0.03)", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8,
-                      }}
-                    >
-                      <Text className="font-bold" style={{ fontSize: 11, color: COACH_MUTED }}>Serie {s.numero}</Text>
-                      <Text className="font-black" style={{ fontSize: 11, color: COACH_ACCENT }}>
-                        {s.minWeight}kg × {s.targetReps} reps{s.tecnica ? ` · ${s.tecnica}` : ""}
-                      </Text>
-                    </View>
-                  ))}
-                </View>
-              </View>
-            );
-          })
-        )}
-      </ReadOnlyPlanModal>
 
-      <ReadOnlyPlanModal
-        visible={dietViewOpen}
-        onClose={() => setDietViewOpen(false)}
-        title="Dieta actual"
-        subtitle={DIA_LABEL[selectedDia]}
-      >
-        {!diaCfgDieta || diaCfgDieta.comidas.length === 0 ? (
-          <Text style={{ fontSize: 13, color: COACH_MUTED, textAlign: "center", marginTop: 40 }}>
-            Sin comidas asignadas este día.
-          </Text>
-        ) : (
-          <>
-            {/* Matriz de distribución macro — barras de carga horizontales
-                compactas (relleno = participación calórica real: P/C ×4,
-                G ×9 kcal/g), junto al total de calorías de la meta. */}
-            <View style={{ ...CARD, borderRadius: 14, padding: 14, marginBottom: 14 }}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <Text className="font-mono" style={{ fontSize: 9, color: COACH_MUTED, letterSpacing: 1, textTransform: "uppercase" }}>
-                  Distribución macro
-                </Text>
-                <Text className="font-black" style={{ fontSize: 15, color: "#fff" }}>
-                  {diaCfgDieta.kcalObjetivo} <Text style={{ fontSize: 10, color: COACH_MUTED }}>KCAL META</Text>
-                </Text>
-              </View>
-              {(() => {
-                const pKcal = diaCfgDieta.macros.protein * 4;
-                const cKcal = diaCfgDieta.macros.carbs * 4;
-                const fKcal = diaCfgDieta.macros.fat * 9;
-                const total = Math.max(pKcal + cKcal + fKcal, 1);
-                const bars = [
-                  { label: "PROTEÍNA", grams: diaCfgDieta.macros.protein, pct: (pKcal / total) * 100, color: COACH_ACCENT },
-                  { label: "CARBOHIDRATOS", grams: diaCfgDieta.macros.carbs, pct: (cKcal / total) * 100, color: "#60a5fa" },
-                  { label: "GRASAS", grams: diaCfgDieta.macros.fat, pct: (fKcal / total) * 100, color: "#fb923c" },
-                ];
-                return bars.map(b => (
-                  <View key={b.label} style={{ marginBottom: 10 }}>
-                    <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
-                      <Text className="font-mono" style={{ fontSize: 9, color: COACH_MUTED, letterSpacing: 0.5 }}>{b.label}</Text>
-                      <Text className="font-black" style={{ fontSize: 11, color: "#fff" }}>{b.grams}g</Text>
-                    </View>
-                    <View style={{ height: 6, borderRadius: 3, backgroundColor: "#1C1C1E", overflow: "hidden" }}>
-                      <View style={{ width: `${Math.max(b.pct, 2)}%`, height: "100%", borderRadius: 3, backgroundColor: b.color }} />
-                    </View>
-                  </View>
-                ));
-              })()}
-            </View>
-
-            {diaCfgDieta.comidas.map(c => {
-              // Comida.descripcion es texto libre donde una línea = un ítem
-              // (ver types/coach-client.ts) — desglosarlo línea por línea en
-              // vez de un párrafo da la lectura de "4 huevos enteros - 100g"
-              // por fila que pide la inspección detallada.
-              const items = c.descripcion.split("\n").map(l => l.trim()).filter(Boolean);
-              return (
-                <View key={c.id} style={{ ...CARD, borderRadius: 14, padding: 14, marginBottom: 10 }}>
-                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <Text className="font-black" style={{ fontSize: 13, color: "#fff", flex: 1, paddingRight: 8 }}>{c.nombre}</Text>
-                    <Text className="font-mono" style={{ fontSize: 10, color: COACH_MUTED }}>{c.hora}</Text>
-                  </View>
-                  {items.length > 0 && (
-                    <View style={{ marginTop: 8, gap: 4 }}>
-                      {/* Calorías "unitarias" por línea — Comida.kcal solo existe
-                          a nivel de comida completa, no hay un valor real por
-                          ingrediente en el modelo, así que esto es un reparto
-                          proporcional del total real entre sus líneas (marcado
-                          "≈"), no una consulta a una base de datos nutricional. */}
-                      {items.map((item, i) => (
-                        <View key={i} style={{ flexDirection: "row", alignItems: "flex-start", gap: 6 }}>
-                          <Text style={{ fontSize: 11, color: COACH_ACCENT, lineHeight: 15 }}>·</Text>
-                          <Text style={{ fontSize: 11, color: "#d4d4d8", lineHeight: 15, flex: 1 }}>{item}</Text>
-                          <Text className="font-mono" style={{ fontSize: 9, color: COACH_MUTED, lineHeight: 15 }}>
-                            ≈{Math.round(c.kcal / items.length)} kcal
-                          </Text>
-                        </View>
-                      ))}
-                    </View>
-                  )}
-                  <Text className="font-mono" style={{ fontSize: 10, color: COACH_ACCENT, marginTop: 8 }}>
-                    {c.kcal} KCAL · P {c.macros.protein}g · C {c.macros.carbs}g · G {c.macros.fat}g
-                  </Text>
-                </View>
-              );
-            })}
-          </>
-        )}
-      </ReadOnlyPlanModal>
     </SafeAreaView>
   );
 }

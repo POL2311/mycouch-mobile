@@ -3,6 +3,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Info } from "lucide-react-native";
 import Svg, { Path, Line, Circle } from "react-native-svg";
 import { useCoach, STAGE_COLORS, paymentBucket, type CoachStudent } from "@/lib/coach";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 
 const VOLT   = "#CCFF00";
 const CYAN   = "#40E0D0";
@@ -52,12 +53,15 @@ function AdherenceCurve({ students }: { students: CoachStudent[] }) {
 }
 
 function AvatarCircle({ student }: { student: CoachStudent }) {
-  const initials = student.avatarInitials || student.name.split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase();
-  const color = student.avatarColor || CYAN;
   return (
-    <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: color, alignItems: "center", justifyContent: "center" }}>
-      <Text className="font-black" style={{ fontSize: 12, color: "#000" }}>{initials}</Text>
-    </View>
+    <UserAvatar 
+      image={student.avatarUrl || null}
+      name={student.name}
+      size={38}
+      initials={student.avatarInitials}
+      color={student.avatarColor || CYAN}
+      isActive={student.isActive}
+    />
   );
 }
 

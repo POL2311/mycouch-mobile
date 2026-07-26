@@ -17,6 +17,7 @@ import {
   Send, X as XIcon, MessagesSquare, Share2, Search, Plus, Mic, Images, Award, Play, Pause, Square,
 } from "lucide-react-native";
 import Svg, { Polygon, Defs, LinearGradient, Stop, Rect } from "react-native-svg";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 import { useAuth } from "@/lib/session";
 import { usePortal, joinCommunityRoom } from "@/lib/portal";
 import { api } from "@/lib/api";
@@ -259,10 +260,15 @@ export function AvatarRing({ member, size, ringColor, glowColor }: {
 //  LOBBY — currentView === "LOBBY"  (RADAR DE SALAS gate, real endpoints)
 // ══════════════════════════════════════════════════════════════════════════════
 function SalasLobby({
-  profileInitials, rooms, loading, fetchErr, isOffline, codeInput, onChangeCode,
+  profileInitials,
+  profileImage,
+  profileName,
+  rooms, loading, fetchErr, isOffline, codeInput, onChangeCode,
   codeError, codeSuccess, isJoining, joinError, onInject, onJoinRoom, onBack,
 }: {
   profileInitials: string;
+  profileImage?: string | null;
+  profileName?: string | null;
   onBack: () => void;
   rooms: PublicRoom[];
   loading: boolean;
@@ -309,14 +315,13 @@ function SalasLobby({
             MYCOACH
           </Text>
         </View>
-        <View
-          style={{
-            position: "absolute", right: 20,
-            width: 44, height: 44, borderRadius: 22, borderWidth: 2, borderColor: VOLT,
-            alignItems: "center", justifyContent: "center", backgroundColor: "#1C1C1E",
-          }}
-        >
-          <Text className="font-black" style={{ fontSize: 13, color: "#fff" }}>{profileInitials}</Text>
+        <View style={{ position: "absolute", right: 20 }}>
+          <UserAvatar 
+            image={profileImage}
+            name={profileName}
+            size={44}
+            initials={profileName ? undefined : profileInitials}
+          />
         </View>
       </View>
 
@@ -2184,6 +2189,8 @@ export default function SalasScreen() {
       {currentView === "LOBBY" ? (
         <SalasLobby
           profileInitials={profileInitials}
+          profileImage={student?.avatarUrl || null}
+          profileName={student?.name || null}
           onBack={goBack}
           rooms={publicRooms}
           loading={roomsLoading}

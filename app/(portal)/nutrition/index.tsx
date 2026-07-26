@@ -8,6 +8,7 @@ import { MotiView, AnimatePresence } from "moti";
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { Droplet, Check, ArrowLeftRight, Utensils, Plus } from "lucide-react-native";
 import { BlurView } from "expo-blur";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 import Animated, {
   useSharedValue, useAnimatedScrollHandler, useAnimatedStyle,
   interpolate, Extrapolation,
@@ -21,6 +22,7 @@ import { triggerImpact, triggerSuccess } from "@/lib/haptics";
 import { ShimmerScreen } from "@/components/ShimmerLoader";
 import { tacticalSubHeader } from "@/lib/typography";
 import { TemplatePickerModal } from "@/components/portal/TemplatePickerModal";
+import { NutritionDisclaimerModal } from "@/components/ui/NutritionDisclaimerModal";
 import type { Meal } from "@/lib/portal";
 
 // ── SF Dark Pro / Volt token registry (MYCOACH_GLOBAL_MASTER_SPEC §3.1) ──────
@@ -158,12 +160,6 @@ const PER_100G_FALLBACK: Record<MacroClass, { kcal: number; fat: number }> = {
   protein: { kcal: 150, fat: 5   },
 };
 
-// lib/api.ts's api<T>() is a bare `res.json() as Promise<T>` — a type
-// assertion, not runtime validation. TypeScript's `number` types on Meal/
-// MealIngredient are therefore a hope, not a guarantee: a malformed backend
-// record (null calories, a non-numeric macro) reaches this arithmetic as-is
-// and silently poisons every downstream sum with NaN. num() is the one
-// coercion point all raw external numeric fields pass through below.
 function num(v: unknown, fallback = 0): number {
   return typeof v === "number" && Number.isFinite(v) ? v : fallback;
 }
@@ -172,7 +168,6 @@ function per100gFor(foodName: string, cls: MacroClass): { kcal: number; fat: num
   return NUTRITION_PER_100G.find(n => n.match.test(foodName)) ?? PER_100G_FALLBACK[cls];
 }
 
-// Macro-class inference: keyword lists first, then protein ≥ carbs comparison.
 function inferMacroClass(ing: ResolvedIngredient): MacroClass {
   const n = ing.name.toLowerCase();
   if (PROTEIN_KEYS.some(k => n.includes(k))) return "protein";
@@ -180,8 +175,6 @@ function inferMacroClass(ing: ResolvedIngredient): MacroClass {
   return ing.macros.protein >= ing.macros.carbs ? "protein" : "carb";
 }
 
-// Calorie-based macro estimation when an ingredient lacks explicit macros
-// (spec §4.3.4): protein ≈ cal×0.25/4 · carbs ≈ cal×0.475/4 · fat ≈ cal×0.30/9.
 function estimateMacros(calories: number) {
   const cal = num(calories);
   return {
@@ -191,9 +184,6 @@ function estimateMacros(calories: number) {
   };
 }
 
-// Resolve a meal into ingredient rows. Newer plans carry `ingredients[]` from
-// dietJson; legacy plans only have `items: string[]`, which we synthesize into
-// rows (grams parsed from the text when present, calories split evenly).
 function resolveIngredients(meal: Meal): ResolvedIngredient[] {
   const mealCalories = num(meal.calories);
   if (meal.ingredients?.length) {
@@ -243,7 +233,6 @@ interface SwapCandidate {
   fatDelta:       number;
 }
 
-// The exact §4.3.4 math: preserve the dominant macro through the ratio bank.
 function computeCandidates(
   ing: ResolvedIngredient,
   cls: MacroClass,
@@ -266,8 +255,6 @@ function computeCandidates(
     });
 }
 
-// Flat food illustration tiles — emoji stand-ins for the web's 20 hand-drawn
-// SVG illustrations, rendered 28px inside 48px tiles (spec §3.2.7).
 const FOOD_ICONS: { match: RegExp; icon: string }[] = [
   { match: /pollo|pechuga|pavo/i,               icon: "🍗" },
   { match: /res|carne/i,                        icon: "🥩" },
@@ -290,15 +277,9 @@ function foodIconFor(name: string): string {
 //  VISUAL MODULES
 // ═════════════════════════════════════════════════════════════════════════════
 
-// ── Brand row — clonado 1:1 de la arquitectura de app/(portal)/stats/index.tsx
-// (Módulo 3 "unificación de navegación"): isotype diamante "F" + wordmark
-// MYCOACH a la izquierda, badge de perfil circular anillado en volt a la
-// derecha. Dieta no tenía ningún header de marca — esta pantalla arrancaba
-// directo en el StreakCard. El número del badge usa el streak real del
-// alumno (usePortal) en vez del placeholder estático "23" que trae stats. ──
-function BrandHeader({ initials, streak }: { initials: string; streak: number }) {
+function BrandHeader({ initials, image, name }: { initials: string; image?: string | null; name?: string | null; }) {
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 20, height: 48 }}>
+    <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 20, height: 48, justifyContent: "space-between" }}>
       <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
         <View style={{ width: 40, height: 40, alignItems: "center", justifyContent: "center" }}>
           <Svg width={40} height={40} viewBox="0 0 62 62" style={StyleSheet.absoluteFill}>
@@ -310,20 +291,11 @@ function BrandHeader({ initials, streak }: { initials: string; streak: number })
           MYCOACH
         </Text>
       </View>
-      <View
-        style={{
-          position: "absolute", right: 0,
-          width: 44, height: 44, borderRadius: 22, borderWidth: 2, borderColor: VOLT,
-          justifyContent: "center", alignItems: "center", backgroundColor: "#1C1C1E",
-        }}
-      >
-        <Text className="font-black" style={{ fontSize: 13, color: "#fff" }}>{streak > 0 ? streak : initials}</Text>
-      </View>
+      <UserAvatar image={image} name={name} initials={initials} size={44} />
     </View>
   );
 }
 
-// ── Cyber Command Banner — SYSTEM_ENFORCED_DIRECTIVE (overhaul spec §1) ──────
 function DirectiveBanner({ text }: { text: string }) {
   return (
     <View
@@ -341,12 +313,10 @@ function DirectiveBanner({ text }: { text: string }) {
         elevation: 4,
       }}
     >
-      {/* Corner brackets */}
       <View style={{ position: "absolute", top: 0, right: 0, width: 10, height: 10, borderLeftWidth: 1, borderBottomWidth: 1, borderColor: "rgba(204,255,0,0.25)" }} />
       <View style={{ position: "absolute", bottom: 0, left: 0, width: 10, height: 10, borderRightWidth: 1, borderTopWidth: 1, borderColor: "rgba(204,255,0,0.25)" }} />
 
       <View className="flex-row items-center mb-1.5" style={{ gap: 6 }}>
-        {/* Live-status pulse */}
         <MotiView
           from={{ opacity: 0.25, scale: 0.8 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -376,9 +346,6 @@ function DirectiveBanner({ text }: { text: string }) {
   );
 }
 
-// ── Glass slab — real backdrop blur + carbon tint + volt spine ───────────────
-// Shadow lives on the outer wrapper (overflow:hidden would clip it); the blur
-// capsule clips itself. `dimezisBlurView` enables true blur on Android.
 function GlassSlab({ children, delay = 0, style, glow = false }: {
   children: React.ReactNode; delay?: number; style?: object; glow?: boolean;
 }) {
@@ -391,9 +358,6 @@ function GlassSlab({ children, delay = 0, style, glow = false }: {
         borderRadius: 24,
         marginBottom: 24,
         shadowColor: VOLT,
-        // Elemento crítico activo (Módulo 3, racha actual) — resplandor LED
-        // pleno (lib/neon.ts's neonGlow) en vez del halo apenas perceptible
-        // que llevan el resto de los bentos.
         shadowOpacity: glow ? 0.4 : 0.06,
         shadowRadius:  glow ? 12  : 20,
         shadowOffset: { width: 0, height: 0 },
@@ -421,7 +385,6 @@ function GlassSlab({ children, delay = 0, style, glow = false }: {
   );
 }
 
-// ── Streak card — racha block (master spec §3.2.4) — the layout crown ────────
 function StreakCard({ dayLabel, streak, activeDate, perfectDay }: {
   dayLabel: string; streak: number; activeDate: string; perfectDay?: boolean;
 }) {
@@ -462,7 +425,6 @@ function StreakCard({ dayLabel, streak, activeDate, perfectDay }: {
   );
 }
 
-// ── Hydration Engine — HIDRATACIÓN row (overhaul spec §3) ────────────────────
 function HydrationRow({ totalMl, syncing, onAdd }: {
   totalMl: number; syncing: boolean; onAdd: () => void;
 }) {
@@ -473,7 +435,6 @@ function HydrationRow({ totalMl, syncing, onAdd }: {
     <GlassSlab delay={60} style={{ padding: 16 }}>
       <View className="flex-row items-center justify-between mb-3">
         <View className="flex-row items-center" style={{ gap: 6 }}>
-          {/* Explicit cyan — never inherits, so it can't vanish black-on-black */}
           <Droplet size={15} color={VOLT} strokeWidth={2.5} />
           <Text className="uppercase" style={{ fontSize: 10, letterSpacing: 1.2, color: T_TERTIARY }}>
             HIDRATACIÓN
@@ -489,8 +450,6 @@ function HydrationRow({ totalMl, syncing, onAdd }: {
           {Array.from({ length: WATER_DOSES }, (_, i) => {
             const isFilled = i < filled;
             return (
-              // Keyed on fill state: a newly-lit circle remounts and springs
-              // from 0.4 → 1 (the "bubble" pop); emptying springs the same way.
               <MotiView
                 key={`${i}-${isFilled ? "on" : "off"}`}
                 from={{ scale: 0.4 }}
@@ -516,7 +475,6 @@ function HydrationRow({ totalMl, syncing, onAdd }: {
           disabled={syncing || limitReached}
           className="rounded-full items-center justify-center ml-3"
           style={({ pressed }) => ({
-            // Frozen state: opaque desaturated glass instead of volt
             backgroundColor: limitReached
               ? "rgba(255, 255, 255, 0.06)"
               : pressed ? "#a3e635" : VOLT,
@@ -548,7 +506,6 @@ function HydrationRow({ totalMl, syncing, onAdd }: {
   );
 }
 
-// ── Weekday pill strip — "L M MI J V S D" (spec §3.2.2) ──────────────────────
 function WeekdayStrip({ activeDay, onSelect }: {
   activeDay: number;
   onSelect: (day: number) => void;
@@ -586,7 +543,6 @@ function WeekdayStrip({ activeDay, onSelect }: {
               } : null),
             }}
           >
-            {/* Remount on activation → spring pop on the newly selected pill */}
             <MotiView
               key={isActive ? "on" : "off"}
               from={{ scale: isActive ? 0.8 : 1 }}
@@ -611,9 +567,7 @@ function WeekdayStrip({ activeDay, onSelect }: {
   );
 }
 
-// ── Slim kcal tracking bar — remaining label + cyan→lime gradient (§3.2.3) ───
 function KcalBar({ consumed, target }: { consumed: number; target: number }) {
-  // 2% minimum so the bar is never invisible, matching web.
   const pct       = Math.max(Math.min(consumed / Math.max(target, 1), 1) * 100, 2);
   const remaining = Math.max(target - consumed, 0);
 
@@ -631,7 +585,6 @@ function KcalBar({ consumed, target }: { consumed: number; target: number }) {
         className="h-2 rounded-full overflow-hidden"
         style={{ backgroundColor: "rgba(255,255,255,0.05)" }}
       >
-        {/* Liquid fluid fill — same neon tube treatment as the reactor */}
         <MotiView
           animate={{ width: `${pct}%` as unknown as number }}
           transition={{ type: "timing", duration: 500 }}
@@ -661,9 +614,6 @@ function KcalBar({ consumed, target }: { consumed: number; target: number }) {
   );
 }
 
-// ── Macro/kcal pill badge — true glassmorphism (spec §3.2.6 hero pills) ──────
-// Real backdrop blur: over the meal photos the image bleeds through frosted,
-// which is where the glass effect actually earns its keep.
 function MacroPill({ label, value, labelColor = "#808080" }: {
   label: string; value: string; labelColor?: string;
 }) {
@@ -692,8 +642,6 @@ function MacroPill({ label, value, labelColor = "#808080" }: {
   );
 }
 
-// ── Cinema meal card — image + vertical dark gradient mask (spec §3.2.6) ─────
-// Mask stops (to top): rgba(0,0,0,0.95) 0% → 0.55 45% → 0.1 100%.
 function MealCardShade() {
   return (
     <Svg style={StyleSheet.absoluteFill}>
@@ -709,8 +657,6 @@ function MealCardShade() {
   );
 }
 
-// ── Sheet hero mask — §3.2.6 detail-hero scrim over the 0.48-opacity image ───
-// rgba(7,7,8,0) 0% → rgba(7,7,8,0.85) 85% → #070708 100%.
 function HeroShade() {
   return (
     <Svg style={StyleSheet.absoluteFill}>
@@ -760,8 +706,6 @@ function MealCard({ meal, checked, syncing, index, onToggle, onOpen }: {
   const macros = meal.macros;
 
   return (
-    // Completed cards stay at full opacity — the reward is the neon perimeter,
-    // never a dimmed/struck-out image.
     <MotiView
       from={{ opacity: 0, translateY: 14 }}
       animate={{ opacity: 1, translateY: 0 }}
@@ -794,7 +738,6 @@ function MealCard({ meal, checked, syncing, index, onToggle, onOpen }: {
         >
           <MealCardShade />
           <View className="p-4 flex-1 justify-between">
-            {/* Top row: time + check control */}
             <View className="flex-row items-center justify-between">
               <View className="flex-row items-center" style={{ gap: 4 }}>
                 {checked && <Check size={11} color={VOLT} strokeWidth={3.5} />}
@@ -808,7 +751,6 @@ function MealCard({ meal, checked, syncing, index, onToggle, onOpen }: {
               <CheckCircle checked={checked} syncing={syncing} onToggle={onToggle} />
             </View>
 
-            {/* Bottom: title + macro pills */}
             <View>
               <Text
                 className="font-black text-[26px] uppercase"
@@ -836,13 +778,6 @@ function MealCard({ meal, checked, syncing, index, onToggle, onOpen }: {
   );
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  MEAL DETAIL SHEET — ONE modal hosting two views (ingredients ⇄ substitution)
-//  A single <Modal> avoids the iOS stacked-modal touch lock entirely; the swap
-//  view replaces the sheet's content instead of presenting a second modal.
-// ═════════════════════════════════════════════════════════════════════════════
-
-// ── Ingredient row (spec §3.2.7 IngredientRow) ───────────────────────────────
 function IngredientRow({ ing, swap, onSwapPress }: {
   ing: ResolvedIngredient;
   swap: AppliedSwap | undefined;
@@ -864,7 +799,6 @@ function IngredientRow({ ing, swap, onSwapPress }: {
         } : null),
       }}
     >
-      {/* Illustration tile */}
       <View
         className="items-center justify-center"
         style={{ width: 48, height: 48, borderRadius: 12, backgroundColor: "rgba(255,255,255,0.05)" }}
@@ -872,7 +806,6 @@ function IngredientRow({ ing, swap, onSwapPress }: {
         <Text style={{ fontSize: 28 }}>{foodIconFor(displayName)}</Text>
       </View>
 
-      {/* Name + macro subtext stack */}
       <View className="flex-1">
         <Text style={{ fontSize: 15, fontWeight: "500", color: T_PRIMARY }} numberOfLines={2}>
           {displayName}
@@ -890,7 +823,6 @@ function IngredientRow({ ing, swap, onSwapPress }: {
         )}
       </View>
 
-      {/* Weight + kcal stack */}
       <View className="items-end">
         <Text className="font-black" style={{ fontSize: 17, color: T_PRIMARY }}>
           {displayGrams}g
@@ -898,7 +830,6 @@ function IngredientRow({ ing, swap, onSwapPress }: {
         <Text style={{ fontSize: 10, color: T_TERTIARY }}>{displayKcal} kcal</Text>
       </View>
 
-      {/* Exchange button */}
       <Pressable
         onPress={onSwapPress}
         hitSlop={8}
@@ -942,7 +873,6 @@ function MealDetailSheet({
   const insets = useSafeAreaInsets();
   const ingredients = useMemo(() => (meal ? resolveIngredients(meal) : []), [meal]);
 
-  // Swap-view derivations — cheap, memoized, and never mutate state in render.
   const cls: MacroClass = swapTarget ? inferMacroClass(swapTarget) : "carb";
   const lockedValue     = swapTarget ? (cls === "protein" ? swapTarget.macros.protein : swapTarget.macros.carbs) : 0;
   const candidates      = useMemo(
@@ -967,7 +897,6 @@ function MealDetailSheet({
     >
       <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.65)", justifyContent: "flex-end" }}>
         <Pressable style={{ flex: 1 }} onPress={dismiss} />
-        {/* Glass panel — translucent obsidian fill + real blur, not a flat box */}
         <BlurView
           intensity={45}
           tint="dark"
@@ -985,9 +914,7 @@ function MealDetailSheet({
           }}
         >
           {swapTarget === null ? (
-            // ══ VIEW 1 — Cinematic hero + itemized ingredients ══
             <>
-              {/* §3.2.6 hero: 0.48-opacity cover image under the vertical scrim */}
               <View style={{ height: 210 }}>
                 <ImageBackground
                   source={{ uri: mealImageFor(meal) }}
@@ -996,7 +923,6 @@ function MealDetailSheet({
                   style={{ flex: 1, justifyContent: "flex-end" }}
                 >
                   <HeroShade />
-                  {/* Grab handle floats over the hero */}
                   <View style={{ position: "absolute", top: 12, left: 0, right: 0, alignItems: "center" }}>
                     <View style={{ width: 36, height: 3, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.12)" }} />
                   </View>
@@ -1045,12 +971,6 @@ function MealDetailSheet({
                 )}
               </ScrollView>
 
-              {/* Cápsula CONFIRMAR COMIDA — sólida verde neón, esquinas
-                  aerodinámicas, altura fija (.cursorrules §4 "Contraste").
-                  El estado ya confirmado conserva su propia variante
-                  translúcida con borde — sigue necesitando leerse distinto
-                  de "aún sin confirmar", pero sin volver a caer en fondo
-                  oscuro/negro para el estado primario. */}
               <View className="px-5 pt-4">
                 <Pressable
                   onPress={onConfirm}
@@ -1086,7 +1006,6 @@ function MealDetailSheet({
               </View>
             </>
           ) : (
-            // ══ VIEW 2 — SustitucionModal content (same modal, swapped focus) ══
             <>
               <View className="items-center pt-3 mb-1">
                 <View style={{ width: 36, height: 3, borderRadius: 2, backgroundColor: "rgba(255,255,255,0.12)" }} />
@@ -1109,7 +1028,6 @@ function MealDetailSheet({
                   {swapTarget.name}
                 </Text>
 
-                {/* Active locked-macro filter pill */}
                 <View
                   className="self-start rounded-full px-3 py-1.5 mt-2"
                   style={{
@@ -1182,7 +1100,6 @@ function MealDetailSheet({
                           borderColor: isApplied ? "rgba(96,165,250,0.4)" : "rgba(255,255,255,0.05)",
                         }}
                       >
-                        {/* Header: illustration + candidate name */}
                         <View className="flex-row items-center gap-3">
                           <View
                             className="items-center justify-center"
@@ -1200,7 +1117,6 @@ function MealDetailSheet({
                           )}
                         </View>
 
-                        {/* Top summary grid: original weight ↔ computed payload */}
                         <View className="flex-row items-center justify-between mt-4 px-3">
                           <View className="items-center">
                             <Text className="uppercase" style={{ fontSize: 9, letterSpacing: 1.2, color: T_TERTIARY }}>
@@ -1210,7 +1126,6 @@ function MealDetailSheet({
                               {swapTarget.grams}g
                             </Text>
                           </View>
-                          {/* Dual neon exchange arrow */}
                           <View
                             style={{
                               shadowColor: VOLT, shadowOpacity: 0.6, shadowRadius: 10,
@@ -1229,7 +1144,6 @@ function MealDetailSheet({
                           </View>
                         </View>
 
-                        {/* Match ribbon — dominant macro preserved by construction */}
                         <View
                           className="self-center rounded-full px-3 py-1 mt-3"
                           style={{
@@ -1242,7 +1156,6 @@ function MealDetailSheet({
                           </Text>
                         </View>
 
-                        {/* Lower mathematical delta blocks */}
                         <View className="flex-row mt-3" style={{ gap: 10 }}>
                           <View
                             className="flex-1 rounded-xl p-3"
@@ -1298,19 +1211,10 @@ function MealDetailSheet({
   );
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-//  MAIN SCREEN
-// ═════════════════════════════════════════════════════════════════════════════
-
 export default function NutritionTab() {
   const { token }               = useAuth();
   const { student, detail, isLoading, refresh } = usePortal();
 
-  // PortalProvider fetches once on mount only — without this, a diet the
-  // coach just assigned (dietJson, via PUT /api/students/[id]) wouldn't show
-  // up until the app was force-quit and reopened. Re-pulling on every focus
-  // is what makes the coach → student sync actually "immediate" the moment
-  // the student opens or returns to this tab.
   useFocusEffect(
     useCallback(() => { refresh(); }, [refresh]),
   );
@@ -1323,14 +1227,10 @@ export default function NutritionTab() {
   const [waterMl,     setWaterMl]     = useState(0);
   const [waterBusy,   setWaterBusy]   = useState(false);
 
-  // Sheet state — one modal, two views. swapTarget non-null = substitution view.
   const [openMeal,    setOpenMeal]    = useState<Meal | null>(null);
   const [swapTarget,  setSwapTarget]  = useState<ResolvedIngredient | null>(null);
-  // Session-local applied swaps, keyed "mealName|ingredientKey".
   const [swaps,       setSwaps]       = useState<Record<string, AppliedSwap>>({});
 
-  // Substitution bank — fetched on demand (event-driven, NOT effect-driven, so
-  // a failed fetch can never re-trigger itself into a loop). Manual retry only.
   const [subs,        setSubs]        = useState<FoodSubstitute[]>([]);
   const [subsLoading, setSubsLoading] = useState(false);
   const [subsError,   setSubsError]   = useState(false);
@@ -1346,11 +1246,8 @@ export default function NutritionTab() {
       .finally(() => setSubsLoading(false));
   }, [subsLoaded, subsLoading]);
 
-  // Every check read/write is keyed to the real calendar date of the browsed
-  // weekday (spec §4.1.2) — browsing tomorrow reads/writes tomorrow's date.
   const activeDate = realDateForDayIndex(activeDay);
 
-  // Hydrate meal checks whenever the browsed day changes.
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
@@ -1364,14 +1261,11 @@ export default function NutritionTab() {
         const keys = res.checks.filter(c => c.kind === "meal").map(c => c.itemKey);
         setCheckedKeys(new Set(keys));
       } catch {
-        // Tolerate network failures — screen still works, just starts unchecked.
       }
     })();
     return () => { cancelled = true; };
   }, [token, activeDate]);
 
-  // Directive banner content — latest coach notice (soft-failure shape: [] for
-  // non-clients / errors just keep the default directive; never an error state).
   useEffect(() => {
     if (!token) return;
     api<Notice[]>("/api/mobile/community/notices", { token })
@@ -1387,7 +1281,6 @@ export default function NutritionTab() {
       .catch(() => {});
   }, [token]);
 
-  // Hydration total for the browsed day.
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
@@ -1398,14 +1291,12 @@ export default function NutritionTab() {
   }, [token, activeDate]);
 
   const addWater = useCallback(async () => {
-    // Hard compliance cap: at or beyond WATER_TARGET_ML the circuit freezes —
-    // no haptic, no optimistic mutation, no POST.
     if (!token || waterBusy || waterMl >= WATER_TARGET_ML) return;
     triggerImpact();
     setSyncError(null);
     setWaterBusy(true);
     const prev = waterMl;
-    setWaterMl(prev + WATER_DOSE_ML); // optimistic
+    setWaterMl(prev + WATER_DOSE_ML);
     try {
       await api("/api/student/water", {
         method: "POST",
@@ -1413,7 +1304,7 @@ export default function NutritionTab() {
         body: { amountMl: WATER_DOSE_ML, date: activeDate },
       });
     } catch {
-      setWaterMl(prev); // rollback
+      setWaterMl(prev);
       setSyncError("NO SE PUDO REGISTRAR EL AGUA — REVISA TU CONEXIÓN");
     } finally {
       setWaterBusy(false);
@@ -1426,7 +1317,6 @@ export default function NutritionTab() {
     const wasChecked   = checkedKeys.has(key);
     const nextChecked  = !wasChecked;
 
-    // Success notification on confirmation; light impact when unchecking.
     if (nextChecked) triggerSuccess();
     else             triggerImpact();
     setSyncError(null);
@@ -1444,7 +1334,6 @@ export default function NutritionTab() {
         body: { date: activeDate, kind: "meal", itemKey: key, done: nextChecked },
       });
     } catch {
-      // Roll back the optimistic update on failure.
       setCheckedKeys(prev => {
         const next = new Set(prev);
         if (wasChecked) next.add(key); else next.delete(key);
@@ -1460,48 +1349,29 @@ export default function NutritionTab() {
     }
   }, [token, checkedKeys, activeDate]);
 
-  // Módulo 2/3 — misma lógica que lib/workout.tsx para la rutina: si el
-  // coach nunca asignó dieta (detail.dietAssigned false) pero el alumno es
-  // auto-entrenador y eligió una plantilla local (lib/selfCoach.tsx), esa
-  // elección alimenta el mismo pipeline de checklist/macros real
-  // (POST /api/me/checks no valida contra ningún dietJson asignado). Un plan
-  // local jamás pisa una dieta real.
   const { localDietBridge, applyDietTemplate } = useSelfCoach();
   const dietAssigned = detail?.dietAssigned ?? ((detail?.diet?.meals?.length ?? 0) > 0);
   const isSelfDietPlan = !dietAssigned && !!localDietBridge;
   const diet = dietAssigned ? detail?.diet : (isSelfDietPlan ? localDietBridge : detail?.diet);
   const selfCoachedStudent = isSelfCoached(student);
-  // Módulo 3 "PLAN ALIMENTICIO LIBRE": el coach existe pero solo asignó
-  // rutina. Módulo 2 "CARGAR MI DIETA": auto-entrenador sin dieta elegida.
   const freeDietPlan  = !dietAssigned && !isSelfDietPlan && !selfCoachedStudent;
   const needsDietPlan = !dietAssigned && !isSelfDietPlan && selfCoachedStudent;
   const [showDietPicker, setShowDietPicker] = useState(false);
 
-  // Per-day diet (diet.days present) resolves against the BROWSED day
-  // (activeDay), not always literal today — so the shown kcal/macro targets
-  // stay consistent with whichever day's meal-checks (fetched for
-  // activeDate above) are on screen. Falls back to the flat diet fields
-  // when there's no per-day structure (existing fixed-diet behavior,
-  // completely unchanged for any diet authored before this feature).
-  const activeJsWeekday = activeDay === 7 ? 0 : activeDay;   // app 1=Mon…7=Sun → JS 0=Sun…6=Sat
+  const activeJsWeekday = activeDay === 7 ? 0 : activeDay;
   const todayDietDay = diet?.days && diet.days.length > 0 ? resolveDietDay(diet.days, activeJsWeekday) : undefined;
   const meals       = todayDietDay?.meals ?? diet?.meals ?? [];
   const totalTarget = num(todayDietDay?.totalCalories ?? diet?.totalCalories, 2800);
 
-  // num() at each addend — one malformed meal record (bad backend data,
-  // never runtime-validated past lib/api.ts's type assertion) must not turn
-  // the whole day's total into NaN.
   const totalConsumed   = meals.reduce((s, m) => checkedKeys.has(m.name) ? s + num(m.calories) : s, 0);
   const proteinConsumed = meals.reduce((s, m) => checkedKeys.has(m.name) ? s + num(m.macros?.protein) : s, 0);
   const completedCount  = meals.filter(m => checkedKeys.has(m.name)).length;
   const perfectDay      = meals.length > 0 && completedCount === meals.length;
 
-  // Pending first, completed last — spec §3.2.6 sorting rule.
   const sortedMeals = [...meals].sort(
     (a, b) => (checkedKeys.has(a.name) ? 1 : 0) - (checkedKeys.has(b.name) ? 1 : 0),
   );
 
-  // Target-achievement haptic: fires once on the false→true transition only.
   const prevPerfect = useRef(false);
   useEffect(() => {
     if (perfectDay && !prevPerfect.current) {
@@ -1510,31 +1380,11 @@ export default function NutritionTab() {
     prevPerfect.current = perfectDay;
   }, [perfectDay]);
 
-  // ── Disparador de éxito único — "checklist de nutrición al 100%" ─────────
-  // Antes había DOS useEffect independientes (uno por caloricPct>=1 que
-  // navegaba a nutrition/success, otro por perfectDay que abría el modal
-  // motivacional) — ambas condiciones se vuelven verdaderas casi siempre en
-  // el MISMO tick (marcar la última comida sube el checklist a 100% y el
-  // consumo calórico al mismo tiempo), así que los dos disparaban a la vez:
-  // un <Modal> de pantalla completa montándose sobre otra presentación de
-  // pantalla completa (el push de router) crashea en iOS. Luego pasó por una
-  // versión intermedia que abría el modal motivacional Y DESPUÉS empujaba
-  // esta pantalla de resumen — ya no crasheaba, pero mostraba dos "éxitos"
-  // consecutivos para el mismo evento (.cursorrules — eliminar la alerta
-  // genérica intermedia). Ahora hay un solo disparador, una sola condición
-  // (perfectDay), y una sola presentación: esta pantalla PROTOCOLO
-  // COMPLETADO de alta fidelidad, directo, sin el modal motivacional de por
-  // medio. El modal motivacional (lib/motivation.tsx) sigue existiendo tal
-  // cual para su otro disparador real — última serie del día en
-  // app/(portal)/index.tsx — que no tiene una pantalla de resumen propia
-  // detrás y por lo tanto no duplica nada.
   const celebratedRef = useRef(false);
   useEffect(() => { celebratedRef.current = false; }, [activeDate]);
   useEffect(() => {
     if (perfectDay && !celebratedRef.current) {
       celebratedRef.current = true;
-      // Cierra cualquier hoja de detalle abierta ANTES de navegar — evita
-      // que quede una sheet nativa montada por debajo de la nueva pantalla.
       setSwapTarget(null);
       setOpenMeal(null);
       router.push({
@@ -1550,8 +1400,6 @@ export default function NutritionTab() {
     if (!perfectDay) celebratedRef.current = false;
   }, [perfectDay, totalConsumed, proteinConsumed, completedCount, meals.length]);
 
-  // Scroll-reactive directive collapse — scrolling the meal list interpolates
-  // the banner's height/opacity to 0 so cards roll up under the calendar strip.
   const scrollY = useSharedValue(0);
   const onScroll = useAnimatedScrollHandler(e => {
     scrollY.value = e.contentOffset.y;
@@ -1613,7 +1461,7 @@ export default function NutritionTab() {
         scrollEventThrottle={16}
       >
         {/* ── Top 0: brand header (Módulo 3) ── */}
-        <BrandHeader initials={initialsOf(student?.name)} streak={student?.streak ?? 0} />
+        <BrandHeader initials={initialsOf(student?.name)} image={student?.avatarUrl} name={student?.name} />
 
         {/* ── Top 1 (the crown): streak card ── */}
         <StreakCard
@@ -1717,6 +1565,8 @@ export default function NutritionTab() {
             ))}
           </>
         )}
+
+        <NutritionDisclaimerModal />
       </Animated.ScrollView>
 
       {/* ── Meal detail sheet: hero + ingredients ⇄ substitution engine ── */}

@@ -135,6 +135,7 @@ export interface CoachStudent {
   email: string;
   avatarInitials?: string;
   avatarColor?: string;
+  avatarUrl?: string | null;
   currentWeight: number;
   previousWeight: number;
   lastWeighIn: string;

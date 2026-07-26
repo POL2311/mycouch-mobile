@@ -4,12 +4,11 @@ import {
 } from "react-native";
 import type { ReactNode } from "react";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import { router, useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams, useNavigation, useFocusEffect } from "expo-router";
 import { MotiView } from "moti";
 import { PulseButton } from "@/components/ui/PulseButton";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useEvent } from "expo";
-import { useVideoPlayer, VideoView, type VideoPlayer, type VideoPlayerStatus } from "expo-video";
 import { BlurView } from "expo-blur";
 import { Heart, Zap, Check, ChevronLeft, Settings, Dumbbell, Minus, Plus, Play, Pause, VideoOff, RotateCcw } from "lucide-react-native";
 import Svg, { Circle, Defs, LinearGradient, Stop, Rect } from "react-native-svg";
@@ -22,6 +21,7 @@ import { triggerImpact, triggerSuccess, triggerWarning } from "@/lib/haptics";
 import { ShimmerBlock } from "@/components/ShimmerLoader";
 import { metricDisplay } from "@/lib/typography";
 import { VOLT, ON_VOLT } from "@/components/workout-ui";
+import { ExerciseVideoPlayer } from "@/components/ExerciseVideoPlayer";
 import type { RoutineExercise } from "@/lib/portal";
 // serieActivaFor/exceedsThreshold viven en lib/exerciseGating.ts — un módulo
 // sin dependencias nativas pesadas, para poder testearlas sin arrastrar
@@ -169,16 +169,12 @@ function StepperCapsule({ label, value, onMinus, onPlus }: {
 //  COMPONENT A — <ActiveWorkoutView /> (the tracker engine, isResting === false)
 // ═════════════════════════════════════════════════════════════════════════════
 function ActiveWorkoutView({
-  ex, videoSource, videoStatus, player, vidPlaying, toggleVideo, watchStatus,
+  ex, videoSource, watchStatus,
   exDone, doneSetsForEx, focusWeight, focusReps, bumpWeight, bumpReps,
   lift, displayPR, onOpenPR, onSetComplete, dockClear,
 }: {
   ex: RoutineExercise;
   videoSource: string | null;
-  videoStatus: VideoPlayerStatus;
-  player: VideoPlayer;
-  vidPlaying: boolean;
-  toggleVideo: () => void;
   watchStatus: "IDLE" | "SCANNING" | "CONNECTED";
   exDone: boolean;
   doneSetsForEx: number;
@@ -204,82 +200,8 @@ function ActiveWorkoutView({
           marginHorizontal: GUTTER, marginTop: 16, backgroundColor: "#1E1E1E",
         }}
       >
-        {!videoSource ? (
-          // Sin videoUrl asignado — placeholder estático, sin nada que cargar.
-          <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: "#1E1E1E" }} />
-        ) : videoStatus === "error" ? (
-          // El enlace existe pero falló, no responde o expiró — miniatura
-          // premium (la foto del ejercicio si el coach la cargó) + badge
-          // neón "DEMOSTRACIÓN VISUAL" + botón de reintento (Módulo 4). El
-          // reintento llama a player.replace() sobre el MISMO source en vez
-          // de recrear el hook — no bloquea ni congela el resto de la
-          // interfaz mientras reintenta.
-          <View style={StyleSheet.absoluteFill}>
-            {ex.imageUrl ? (
-              <Image source={{ uri: ex.imageUrl }} style={StyleSheet.absoluteFill} resizeMode="cover" />
-            ) : (
-              <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: "#1E1E1E", alignItems: "center", justifyContent: "center" }}>
-                <VideoOff size={26} color="rgba(255,255,255,0.3)" />
-              </View>
-            )}
-            <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.35)" }} />
-            <View
-              style={{
-                position: "absolute", top: 12, left: 12, flexDirection: "row", alignItems: "center", gap: 5,
-                backgroundColor: "rgba(0,0,0,0.6)", borderWidth: 1, borderColor: VOLT, borderRadius: 6,
-                paddingHorizontal: 8, paddingVertical: 4,
-              }}
-            >
-              <View style={{ width: 5, height: 5, borderRadius: 2.5, backgroundColor: VOLT }} />
-              <Text style={{ fontSize: 9, fontWeight: "900", letterSpacing: 1, color: VOLT, textTransform: "uppercase" }}>
-                DEMOSTRACIÓN VISUAL
-              </Text>
-            </View>
-            <TouchableOpacity
-              activeOpacity={0.75}
-              onPress={() => { triggerImpact(); player.replace(videoSource); }}
-              style={{
-                position: "absolute", bottom: 12, right: 12, flexDirection: "row", alignItems: "center", gap: 6,
-                backgroundColor: "rgba(0,0,0,0.65)", borderWidth: 1, borderColor: "rgba(255,255,255,0.25)",
-                borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7,
-              }}
-            >
-              <RotateCcw size={13} color="#fff" />
-              <Text style={{ fontSize: 10, fontWeight: "800", letterSpacing: 0.5, color: "#fff" }}>REINTENTAR</Text>
-            </TouchableOpacity>
-          </View>
-        ) : videoStatus === "readyToPlay" ? (
-          <VideoView
-            player={player}
-            style={StyleSheet.absoluteFill}
-            contentFit="cover"
-            nativeControls={false}
-          />
-        ) : (
-          // "idle" | "loading" — el enlace es válido pero el buffer todavía
-          // no tiene frames que mostrar.
-          <ShimmerBlock style={StyleSheet.absoluteFill} />
-        )}
+        <ExerciseVideoPlayer videoUrl={videoSource} thumbnailUrl={ex.imageUrl} />
         <VideoMask />
-
-        {/* Center translucent play controller — inerte mientras carga o si
-            el video falló, para no sugerir una acción que no hace nada. */}
-        <View style={{ ...StyleSheet.absoluteFillObject, alignItems: "center", justifyContent: "center" }}>
-          <TouchableOpacity
-            activeOpacity={0.7}
-            onPress={toggleVideo}
-            disabled={!videoSource || videoStatus === "loading" || videoStatus === "error"}
-            style={{
-              width: 60, height: 60, borderRadius: 30, backgroundColor: "rgba(255, 255, 255, 0.15)",
-              justifyContent: "center", alignItems: "center",
-              opacity: videoSource && videoStatus === "readyToPlay" ? 1 : 0.4,
-            }}
-          >
-            {vidPlaying && videoSource && videoStatus === "readyToPlay"
-              ? <Pause size={24} color="#fff" fill="#fff" />
-              : <Play size={24} color="#fff" fill="#fff" style={{ marginLeft: 3 }} />}
-          </TouchableOpacity>
-        </View>
 
         {/* Absolute EN CURSO badge — lower left */}
         <View
@@ -672,10 +594,21 @@ function RestTimerView({
 // ═════════════════════════════════════════════════════════════════════════════
 //  SCREEN — the absolute interchange
 // ═════════════════════════════════════════════════════════════════════════════
-export default function ExerciseFocusScreen() {
+export default function ActiveExerciseScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const idx = Number(id);
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation();
+
+  useFocusEffect(
+    useCallback(() => {
+      const parent = navigation.getParent();
+      parent?.setOptions({ tabBarStyle: { display: "none" } });
+      return () => {
+        parent?.setOptions({ tabBarStyle: undefined });
+      };
+    }, [navigation])
+  );
+  const idx = Number(id);
   const { token } = useAuth();
   const { student, refresh } = usePortal();
   const { addXP } = useGamification();
@@ -805,20 +738,6 @@ export default function ExerciseFocusScreen() {
 
   // ── Video ────────────────────────────────────────────────────────────────
   const videoSource = ex?.videoUrl ?? null;
-  const [vidPlaying, setVidPlaying] = useState(true);
-  const player = useVideoPlayer(videoSource, p => {
-    if (videoSource) { p.loop = true; p.muted = true; p.play(); }
-  });
-  // idle/loading → ShimmerBlock, error → miniatura premium, readyToPlay →
-  // el VideoView real (ver ActiveWorkoutView). Sin esto un enlace roto o
-  // lento se veía como una pantalla negra sin ninguna señal de qué pasó.
-  const { status: videoStatus } = useEvent(player, "statusChange", { status: player.status });
-  const toggleVideo = useCallback(() => {
-    if (!videoSource) return;
-    triggerImpact();
-    if (vidPlaying) player.pause(); else player.play();
-    setVidPlaying(v => !v);
-  }, [videoSource, vidPlaying, player]);
 
   // ── Auto-return to lobby once this exercise's last set completes ────────
   const doneSetsForEx = ex ? Math.min(doneSets[idx] ?? 0, ex.sets) : 0;
@@ -863,7 +782,7 @@ export default function ExerciseFocusScreen() {
   const chromeTint = isResting ? TEAL : VOLT;
 
   return (
-    <SafeAreaView edges={["bottom"]} style={{ flex: 1, backgroundColor: isResting ? REST_BG : "#070708" }}>
+    <View style={{ flex: 1, backgroundColor: isResting ? REST_BG : "#070708", paddingBottom: insets.bottom }}>
 
       {/* ── 1 · Minimalist structural navigation header — shared chrome for
           BOTH branches, so the back affordance never disappears mid-workout ── */}
@@ -909,10 +828,6 @@ export default function ExerciseFocusScreen() {
         <ActiveWorkoutView
           ex={ex}
           videoSource={videoSource}
-          videoStatus={videoStatus}
-          player={player}
-          vidPlaying={vidPlaying}
-          toggleVideo={toggleVideo}
           watchStatus={watchStatus}
           exDone={exDone}
           doneSetsForEx={doneSetsForEx}
@@ -1006,6 +921,6 @@ export default function ExerciseFocusScreen() {
           </BlurView>
         </KeyboardAvoidingView>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }

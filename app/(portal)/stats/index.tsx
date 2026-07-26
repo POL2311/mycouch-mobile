@@ -16,6 +16,8 @@ import Svg, {
 import Animated, {
   useSharedValue, useAnimatedStyle, withDelay, withTiming, Easing,
 } from "react-native-reanimated";
+import { useFocusEffect } from "expo-router";
+import { UserAvatar } from "@/components/ui/UserAvatar";
 import { BlurView } from "expo-blur";
 import { usePortal, uploadProgressPhoto, type PortalDetail } from "@/lib/portal";
 import { useAuth } from "@/lib/session";
@@ -533,14 +535,13 @@ export default function StatsScreen() {
               MYCOACH
             </Text>
           </View>
-          <View
-            style={{
-              position: "absolute", right: 20,
-              width: 44, height: 44, borderRadius: 22, borderWidth: 2, borderColor: VOLT,
-              justifyContent: "center", alignItems: "center", backgroundColor: PANEL,
-            }}
-          >
-            <Text className="font-black" style={{ fontSize: 13, color: "#fff" }}>23</Text>
+          <View style={{ position: "absolute", right: 20 }}>
+            <UserAvatar 
+              image={student?.avatarUrl || null} 
+              name={student?.name} 
+              size={44} 
+              initials={student?.name ? undefined : "23"}
+            />
           </View>
         </View>
 

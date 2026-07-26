@@ -8,6 +8,7 @@ interface AuthUser {
   id:    string;
   name:  string;
   email: string;
+  image?: string;
   role:  "CLIENT" | "COACH" | "ADMIN";
 }
 

@@ -71,6 +71,7 @@ export interface Student {
   id:            string;
   name:          string;
   email:         string;
+  avatarUrl?:    string | null;
   currentWeight: number;
   streak:        number;
   stage:         string;
