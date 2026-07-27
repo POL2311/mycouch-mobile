@@ -1,8 +1,10 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
+import type { CoachRequest } from "@/types/coachRequest";
 import { type DietaJson, type RoutineJson } from "@/types/coach-client";
 import { MOTIVATION_PREFIX } from "@/lib/portal";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  COACH DATA LAYER — types, never-throw parsers, and API contracts mirrored
@@ -162,6 +164,7 @@ export interface CoachStudent {
   // session. Any roster row works as a source since a coach's whole roster
   // shares one coachId.
   coachId?: string;
+  status?: "ACTIVO" | "SUSPENDIDO" | "MANTENIMIENTO";
   scheduledChange?: ScheduledChangeRow | null;
 }
 
@@ -315,6 +318,7 @@ export interface CoachStudentDetail {
   // lastWeighIn — un alumno que marca comidas o series a diario pero no
   // pesa hace semanas ya no se marca como inactivo por error.
   lastActivityDate: string | null;
+  photos?: { id: string; url: string; label: string; weight: number | null; createdAt: string }[];
 }
 
 function asArray<T>(v: unknown): T[] {
@@ -390,6 +394,7 @@ export async function fetchStudentDetail(studentId: string, token: string): Prom
     // los de hoy — checks ya trae la lista completa del endpoint, filtrarla
     // a `date === today` arriba era solo para el checklist visual de hoy.
     lastActivityDate: mostRecentDateStr([...checks.map(c => c.date), student?.lastWeighIn]),
+    photos: asArray(detail?.photos),
   };
 }
 
@@ -497,12 +502,16 @@ export function unlinkStudent(studentId: string, token: string): Promise<{ succe
 // record — see lib/portal.tsx's fetchFullStudentDetail), NOT via
 // /api/mobile/portal, whose field-stripping normalizer would silently drop
 // anything outside its old flat-meal allowlist.
-export function assignStudentDiet(
+export async function assignStudentDiet(
   studentId: string, diet: DietaJson, token: string,
 ): Promise<{ success: boolean }> {
-  return api<{ success: boolean }>(`/api/students/${studentId}`, {
+  const res = await api<{ success: boolean }>(`/api/students/${studentId}`, {
     method: "PUT", token, body: { detailUpdates: { diet } } as unknown as Record<string, unknown>,
   });
+  if (res.success !== false) {
+    await AsyncStorage.setItem(`@coach_diet_${studentId}`, JSON.stringify(diet)).catch(() => {});
+  }
+  return res;
 }
 
 // PUT /api/students/[id] { detailUpdates: { routine } } — direct routine
@@ -512,12 +521,16 @@ export function assignStudentDiet(
 // is the ONLY path that can carry per-set minWeight/targetReps end to end —
 // ChangeStageModal's template-based routineTemplateId path writes the OLD
 // flat RoutineData shape and has no concept of strict per-set thresholds.
-export function assignStudentRoutine(
+export async function assignStudentRoutine(
   studentId: string, routine: RoutineJson, token: string,
 ): Promise<{ success: boolean }> {
-  return api<{ success: boolean }>(`/api/students/${studentId}`, {
+  const res = await api<{ success: boolean }>(`/api/students/${studentId}`, {
     method: "PUT", token, body: { detailUpdates: { routine } } as unknown as Record<string, unknown>,
   });
+  if (res.success !== false) {
+    await AsyncStorage.setItem(`@coach_routine_${studentId}`, JSON.stringify(routine)).catch(() => {});
+  }
+  return res;
 }
 
 // Used by ChangeStageModal to warn a coach before a template-based routine
@@ -646,6 +659,29 @@ interface CoachState {
   // are responsible for reverting this (pass the inverse patch) if the
   // matching API call then fails.
   patchStudent: (id: string, patch: Partial<CoachStudent>) => void;
+}
+
+// ── Solicitudes de Coaching (Módulo 2) ──────────────────────────────────────
+export async function fetchPendingRequests(token: string): Promise<CoachRequest[]> {
+  try {
+    const res = await api<CoachRequest[]>("/api/mobile/coach/requests", { token });
+    return Array.isArray(res) ? res : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function respondToRequest(requestId: string, status: "ACCEPTED" | "REJECTED", token: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${process.env.EXPO_PUBLIC_API_URL || "http://localhost:3000"}/api/mobile/coach/requests/${requestId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ status }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 const CoachContext = createContext<CoachState | null>(null);

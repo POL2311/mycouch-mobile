@@ -1,21 +1,39 @@
-import { View, Text, TouchableOpacity, Pressable, ScrollView, Modal, ActivityIndicator } from "react-native";
+import { View, Text, TouchableOpacity, Pressable, ScrollView, Modal, ActivityIndicator, Alert } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useState, useEffect, useCallback } from "react";
-import { X, Dumbbell, Utensils, Check } from "lucide-react-native";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { X, Dumbbell, Utensils, Check, Download } from "lucide-react-native";
 import { useAuth } from "@/lib/session";
 import { fetchTemplates, type StoredTemplate, type TemplateType } from "@/lib/coach";
 import { triggerImpact, triggerSuccess, triggerWarning } from "@/lib/haptics";
 
-// ── Módulo 2 "Auto-Entrenador" — selector de plantillas reales del catálogo
-// (GET /api/templates, accesible a cualquier usuario autenticado sin filtro
-// de rol) compartido entre Workout ("+ CREAR MI RUTINA") y Dieta
-// ("+ CARGAR MI DIETA"). Aplicar una plantilla la persiste SOLO en este
-// dispositivo (lib/selfCoach.tsx) — nunca se presenta como guardada en el
-// servidor, porque no existe endpoint CLIENT para eso.
 const VOLT   = "#CCFF00";
 const SILVER = "#8e8e93";
 const GLASS  = { backgroundColor: "rgba(28, 28, 30, 0.4)", borderWidth: 1, borderColor: "rgba(255, 255, 255, 0.06)" } as const;
 const athletic = { fontWeight: "900" as const, fontStyle: "italic" as const, textTransform: "uppercase" as const };
+
+const CATEGORIES = ["TODAS", "HIPERTROFIA", "PÉRDIDA DE GRASA", "CALISTENIA / EN CASA", "FUERZA"] as const;
+
+function deriveCategory(name: string): string {
+  const upper = name.toUpperCase();
+  if (upper.includes("HIPERTROFIA") || upper.includes("VOLUMEN")) return "HIPERTROFIA";
+  if (upper.includes("GRASA") || upper.includes("DEFINICIÓN")) return "PÉRDIDA DE GRASA";
+  if (upper.includes("CALISTENIA") || upper.includes("CASA")) return "CALISTENIA / EN CASA";
+  if (upper.includes("FUERZA") || upper.includes("LIFT")) return "FUERZA";
+  return "GENERAL";
+}
+
+function deriveDifficulty(tpl: StoredTemplate): { label: string; color: string } {
+  if (tpl.type === "routine") {
+    if (tpl.daysPerWeek <= 3) return { label: "PRINCIPIANTE", color: "#4ade80" }; // Green
+    if (tpl.daysPerWeek === 4) return { label: "INTERMEDIO", color: "#facc15" }; // Yellow
+    return { label: "AVANZADO", color: "#f87171" }; // Red
+  } else {
+    // Diet
+    if (tpl.totalCalories < 1800) return { label: "DÉFICIT ESTRICTO", color: "#f87171" };
+    if (tpl.totalCalories > 2500) return { label: "VOLUMEN", color: "#a78bfa" };
+    return { label: "ESTÁNDAR", color: "#2dd4bf" };
+  }
+}
 
 export function TemplatePickerModal({ visible, onClose, type, onApply }: {
   visible: boolean;
@@ -29,6 +47,7 @@ export function TemplatePickerModal({ visible, onClose, type, onApply }: {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [applyingId, setApplyingId] = useState<string | null>(null);
+  const [activeCategory, setActiveCategory] = useState<string>("TODAS");
 
   useEffect(() => {
     if (!visible || !token) return;
@@ -40,20 +59,38 @@ export function TemplatePickerModal({ visible, onClose, type, onApply }: {
       .finally(() => setLoading(false));
   }, [visible, type, token]);
 
-  const apply = useCallback(async (tpl: StoredTemplate) => {
-    setApplyingId(tpl.id);
-    try {
-      await onApply(tpl);
-      triggerSuccess();
-      onClose();
-    } catch {
-      triggerWarning();
-    } finally {
-      setApplyingId(null);
-    }
-  }, [onApply, onClose]);
+  const confirmAndApply = useCallback((tpl: StoredTemplate) => {
+    Alert.alert(
+      "Confirmación",
+      `¿Deseas reemplazar tu ${type === "routine" ? "rutina" : "dieta"} activa actual por esta plantilla?`,
+      [
+        { text: "Cancelar", style: "cancel" },
+        { 
+          text: "Reemplazar", 
+          style: "default",
+          onPress: async () => {
+            setApplyingId(tpl.id);
+            try {
+              await onApply(tpl);
+              triggerSuccess();
+              onClose();
+            } catch {
+              triggerWarning();
+            } finally {
+              setApplyingId(null);
+            }
+          }
+        }
+      ]
+    );
+  }, [onApply, onClose, type]);
 
-  const title = type === "routine" ? "CATÁLOGO DE RUTINAS" : "CATÁLOGO DE DIETAS";
+  const filteredTemplates = useMemo(() => {
+    if (activeCategory === "TODAS") return templates;
+    return templates.filter(t => deriveCategory(t.name) === activeCategory);
+  }, [templates, activeCategory]);
+
+  const title = type === "routine" ? "EXPLORAR PLANTILLAS GRATUITAS" : "CATÁLOGO DE DIETAS";
   const Icon  = type === "routine" ? Dumbbell : Utensils;
 
   return (
@@ -75,9 +112,27 @@ export function TemplatePickerModal({ visible, onClose, type, onApply }: {
           </TouchableOpacity>
         </View>
 
-        <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 0.5, color: SILVER, paddingHorizontal: 20, marginBottom: 14, lineHeight: 14 }}>
-          Modo auto-entrenador — elige una plantilla real del catálogo. Se guarda solo en este dispositivo; no tienes coach vinculado que la sincronice.
-        </Text>
+        {type === "routine" && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20, gap: 8, marginBottom: 16 }}>
+            {CATEGORIES.map(cat => {
+              const isActive = activeCategory === cat;
+              return (
+                <TouchableOpacity
+                  key={cat}
+                  activeOpacity={0.8}
+                  onPress={() => { triggerImpact(); setActiveCategory(cat); }}
+                  style={{
+                    paddingHorizontal: 16, paddingVertical: 8, borderRadius: 999,
+                    backgroundColor: isActive ? VOLT : "rgba(255,255,255,0.05)",
+                    borderWidth: 1, borderColor: isActive ? VOLT : "rgba(255,255,255,0.1)"
+                  }}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: "800", color: isActive ? "#000" : SILVER, textTransform: "uppercase" }}>{cat}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
 
         <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
           {loading ? (
@@ -90,31 +145,53 @@ export function TemplatePickerModal({ visible, onClose, type, onApply }: {
                 [ ERROR // NO SE PUDO CARGAR EL CATÁLOGO ]
               </Text>
             </View>
-          ) : templates.length === 0 ? (
+          ) : filteredTemplates.length === 0 ? (
             <View style={{ ...GLASS, borderRadius: 16, padding: 20, alignItems: "center" }}>
               <Text className="font-mono text-center" style={{ fontSize: 10, color: SILVER, lineHeight: 16 }}>
-                SIN PLANTILLAS DISPONIBLES EN EL CATÁLOGO TODAVÍA
+                SIN PLANTILLAS DISPONIBLES PARA ESTA CATEGORÍA
               </Text>
             </View>
           ) : (
-            templates.map(tpl => {
+            filteredTemplates.map(tpl => {
+              const totalEx = tpl.type === "routine" ? tpl.days.reduce((n, d) => n + d.exercises.length, 0) : 0;
               const sub = tpl.type === "routine"
-                ? `${tpl.daysPerWeek} DÍAS/SEMANA · ${tpl.days.reduce((n, d) => n + d.exercises.length, 0)} EJERCICIOS`
+                ? `${tpl.daysPerWeek} días/semana • ${totalEx} ejercicios en total`
                 : `${tpl.totalCalories} KCAL · ${tpl.meals.length} COMIDAS`;
+              
               const applying = applyingId === tpl.id;
+              const diff = deriveDifficulty(tpl);
+
               return (
-                <Pressable
-                  key={tpl.id}
-                  onPress={() => { triggerImpact(); apply(tpl); }}
-                  disabled={applying}
-                  style={{ ...GLASS, borderRadius: 16, padding: 16, marginBottom: 10, flexDirection: "row", alignItems: "center", gap: 12, opacity: applying ? 0.6 : 1 }}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text className="font-black uppercase" style={{ fontSize: 13, color: "#fff" }}>{tpl.name}</Text>
-                    <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 0.5, color: SILVER, marginTop: 3 }}>{sub}</Text>
+                <View key={tpl.id} style={{ ...GLASS, borderRadius: 16, padding: 16, marginBottom: 12 }}>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                    <Text className="font-black uppercase" style={{ fontSize: 15, color: "#fff", flex: 1, paddingRight: 8 }}>{tpl.name}</Text>
+                    <View style={{ backgroundColor: "rgba(255,255,255,0.1)", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
+                      <Text style={{ fontSize: 9, fontWeight: "800", color: diff.color, letterSpacing: 0.5 }}>
+                        {diff.label}
+                      </Text>
+                    </View>
                   </View>
-                  {applying ? <ActivityIndicator size="small" color={VOLT} /> : <Check size={16} color={VOLT} />}
-                </Pressable>
+                  
+                  <Text style={{ fontSize: 12, color: SILVER, marginBottom: 14 }}>{sub}</Text>
+                  
+                  <TouchableOpacity
+                    activeOpacity={0.8}
+                    disabled={applying}
+                    onPress={() => { triggerImpact(); confirmAndApply(tpl); }}
+                    style={{
+                      flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+                      backgroundColor: applying ? "rgba(204,255,0,0.5)" : VOLT,
+                      paddingVertical: 12, borderRadius: 12
+                    }}
+                  >
+                    {applying ? <ActivityIndicator size="small" color="#000" /> : (
+                      <>
+                        <Download size={14} color="#000" />
+                        <Text style={{ ...athletic, fontSize: 13, color: "#000" }}>USAR ESTA PLANTILLA</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </View>
               );
             })
           )}

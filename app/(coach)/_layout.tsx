@@ -35,8 +35,13 @@ const TAB_META: Record<string, { label: string; icon: IconName; iconOutline: Ico
 // ── Coach floor dock — premium dark palette: #0F0F10 fill, #2C2C2E hairline.
 // The focused tab morphs into the floating cyan-neon sphere; everything else
 // stays a flat outline glyph. ────────────────────────────────────────────────
-function CoachDock({ state, navigation }: BottomTabBarProps) {
+function CoachDock({ state, navigation, descriptors }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
+  
+  const focusedRoute = state.routes[state.index];
+  const { options } = descriptors[focusedRoute.key];
+  // @ts-ignore
+  if (options.tabBarStyle?.display === "none") return null;
 
   return (
     <View

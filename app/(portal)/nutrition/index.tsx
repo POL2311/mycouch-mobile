@@ -22,7 +22,7 @@ import { triggerImpact, triggerSuccess } from "@/lib/haptics";
 import { ShimmerScreen } from "@/components/ShimmerLoader";
 import { tacticalSubHeader } from "@/lib/typography";
 import { TemplatePickerModal } from "@/components/portal/TemplatePickerModal";
-import { NutritionDisclaimerModal } from "@/components/ui/NutritionDisclaimerModal";
+import { ScientificSourcesModal } from "@/components/ui/ScientificSourcesModal";
 import type { Meal } from "@/lib/portal";
 
 // ── SF Dark Pro / Volt token registry (MYCOACH_GLOBAL_MASTER_SPEC §3.1) ──────
@@ -1212,7 +1212,7 @@ function MealDetailSheet({
 }
 
 export default function NutritionTab() {
-  const { token }               = useAuth();
+  const { token, user }         = useAuth();
   const { student, detail, isLoading, refresh } = usePortal();
 
   useFocusEffect(
@@ -1461,7 +1461,7 @@ export default function NutritionTab() {
         scrollEventThrottle={16}
       >
         {/* ── Top 0: brand header (Módulo 3) ── */}
-        <BrandHeader initials={initialsOf(student?.name)} image={student?.avatarUrl} name={student?.name} />
+        <BrandHeader initials={initialsOf(user?.name || student?.name)} image={user?.image || student?.avatarUrl} name={user?.name || student?.name} />
 
         {/* ── Top 1 (the crown): streak card ── */}
         <StreakCard
@@ -1566,7 +1566,7 @@ export default function NutritionTab() {
           </>
         )}
 
-        <NutritionDisclaimerModal />
+        <ScientificSourcesModal />
       </Animated.ScrollView>
 
       {/* ── Meal detail sheet: hero + ingredients ⇄ substitution engine ── */}

@@ -19,13 +19,15 @@ import Animated, {
 import { useFocusEffect } from "expo-router";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { BlurView } from "expo-blur";
-import { usePortal, uploadProgressPhoto, type PortalDetail } from "@/lib/portal";
+import { usePortal, uploadProgressPhoto, deleteProgressPhoto, editProgressPhoto, type PortalDetail } from "@/lib/portal";
+import ProgressGallery from "@/components/ui/ProgressGallery";
 import { useAuth } from "@/lib/session";
 import { api } from "@/lib/api";
 import { todayDateStr, useWorkout } from "@/lib/workout";
 import { triggerImpact, triggerSuccess, triggerWarning } from "@/lib/haptics";
 import { ShimmerScreen } from "@/components/ShimmerLoader";
 import { tacticalSubHeader } from "@/lib/typography";
+import { BiometricsCard } from "@/components/BiometricsCard";
 
 // ── Stats engine tokens ──────────────────────────────────────────────────────
 const VOLT   = "#CCFF00";
@@ -193,93 +195,41 @@ function GridMatrix() {
 //  (detail.photos, subidas vía POST /api/me/photos — mismo endpoint real que
 //  ya usa el web, ahora también cableado en mobile a través de lib/portal.tsx).
 // ══════════════════════════════════════════════════════════════════════════════
-interface MonthBlock {
-  key: string;             // "2026-07"
-  label: string;           // "JULIO 2026"
-  monthNumber: number;     // 1-based, cronológico
-  netChangeKg: number | null;
-  entryCount: number;
-  photos: NonNullable<PortalDetail["photos"]>;
-}
-
-function buildMonthBlocks(weightHistory: { weight: number; date: string }[], photos: PortalDetail["photos"]): MonthBlock[] {
-  const byMonth = new Map<string, { weight: number; date: string }[]>();
-  for (const w of weightHistory) {
-    const key = w.date.slice(0, 7);
-    if (!byMonth.has(key)) byMonth.set(key, []);
-    byMonth.get(key)!.push(w);
-  }
-  const keys = [...byMonth.keys()].sort();
-  return keys.map((key, i) => {
-    const entries = byMonth.get(key)!.slice().sort((a, b) => a.date.localeCompare(b.date));
-    const net = entries.length >= 2 ? Math.round((entries[entries.length - 1]!.weight - entries[0]!.weight) * 10) / 10 : null;
-    const [y, m] = key.split("-").map(Number);
-    const label = new Date(y!, m! - 1, 1).toLocaleDateString("es-MX", { month: "long", year: "numeric" }).toUpperCase();
-    const monthPhotos = (photos ?? []).filter(p => p.createdAt.slice(0, 7) === key);
-    return { key, label, monthNumber: i + 1, netChangeKg: net, entryCount: entries.length, photos: monthPhotos };
-  }).reverse();
-}
-
-// Responsive fix: las miniaturas eran fijas (84px) — en pantallas angostas
-// (SE, teclado abierto reduciendo el alto disponible) se veían desbordadas o
-// desproporcionadas. Ahora el tamaño es un porcentaje real del ancho del
-// dispositivo (useWindowDimensions), acotado entre un piso y un techo para no
-// crecer sin control en tablets.
-function MonthPhotoGallery({ block, uploading, onAddPhoto }: {
-  block: MonthBlock; uploading: boolean; onAddPhoto: (block: MonthBlock) => void;
-}) {
-  const { width } = useWindowDimensions();
-  const thumb = Math.max(64, Math.min(96, width * 0.22));
-  return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, marginTop: 12 }}>
-      {block.photos.map(p => (
-        <Image key={p.id} source={{ uri: p.url }} style={{ width: thumb, height: thumb, borderRadius: 10 }} />
-      ))}
-      <TouchableOpacity
-        activeOpacity={0.75}
-        disabled={uploading}
-        onPress={() => onAddPhoto(block)}
-        style={{
-          width: thumb, height: thumb, borderRadius: 10, alignItems: "center", justifyContent: "center",
-          borderWidth: 1.5, borderStyle: "dashed", borderColor: "rgba(204,255,0,0.4)", backgroundColor: "rgba(204,255,0,0.04)",
-        }}
-      >
-        {uploading ? <ActivityIndicator size="small" color={VOLT} /> : <Plus size={20} color={VOLT} />}
-      </TouchableOpacity>
-    </ScrollView>
-  );
-}
-
-function EvolutionModal({ visible, onClose, weightHistory, photos, token, onUploaded }: {
+function EvolutionModal({ visible, onClose, photos, token, onUploaded }: {
   visible: boolean; onClose: () => void;
-  weightHistory: { weight: number; date: string }[];
   photos: PortalDetail["photos"];
   token: string | null;
   onUploaded: () => void;
 }) {
-  const [uploadingKey, setUploadingKey] = useState<string | null>(null);
-  const blocks = useMemo(() => buildMonthBlocks(weightHistory, photos), [weightHistory, photos]);
   const insets = useSafeAreaInsets();
+  const [isLoading, setIsLoading] = useState(false);
 
-  const addPhoto = useCallback(async (block: MonthBlock) => {
+  const handleUploadPhoto = async (uri: string, angle: string, weight: number) => {
     if (!token) return;
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) { triggerWarning(); return; }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ["images"], quality: 0.7 });
-    if (result.canceled || !result.assets[0]) return;
-    setUploadingKey(block.key);
-    const uploaded = await uploadProgressPhoto(result.assets[0].uri, `MES ${block.monthNumber}`, token);
-    setUploadingKey(null);
+    setIsLoading(true);
+    const uploaded = await uploadProgressPhoto(uri, angle, token, weight);
+    setIsLoading(false);
     if (uploaded) { triggerSuccess(); onUploaded(); } else { triggerWarning(); }
-  }, [token, onUploaded]);
+  };
+
+  const handleDeletePhoto = async (id: string) => {
+    if (!token) return;
+    setIsLoading(true);
+    const deleted = await deleteProgressPhoto(id, token);
+    setIsLoading(false);
+    if (deleted) { triggerSuccess(); onUploaded(); } else { triggerWarning(); }
+  };
+
+  const handleEditPhoto = async (id: string, updates: { label?: string; weight?: number; createdAt?: string }) => {
+    if (!token) return;
+    setIsLoading(true);
+    const edited = await editProgressPhoto(id, updates, token);
+    setIsLoading(false);
+    if (edited) { triggerSuccess(); onUploaded(); } else { triggerWarning(); }
+  };
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      {/* Responsive fix: SafeAreaView dentro de un <Modal> puede no resolver
-          los insets correctamente en algunos dispositivos Android (el Modal
-          nativo vive en su propia ventana) — useSafeAreaInsets() explícito
-          garantiza que el botón CERRAR nunca quede debajo de la status bar,
-          sin depender de ese contexto. */}
       <View style={{ flex: 1, backgroundColor: "rgba(7,7,8,0.97)", paddingTop: insets.top + 12, paddingBottom: insets.bottom }}>
         <View style={{ flex: 1, flexGrow: 1 }}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginBottom: 16 }}>
@@ -298,27 +248,13 @@ function EvolutionModal({ visible, onClose, weightHistory, photos, token, onUplo
           </View>
 
           <ScrollView contentContainerStyle={{ flexGrow: 1, paddingHorizontal: 20, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
-            {blocks.length === 0 ? (
-              <View style={{ backgroundColor: "#0F0F10", borderRadius: 16, padding: 24, alignItems: "center", borderWidth: 1, borderColor: "rgba(255,255,255,0.06)" }}>
-                <Text className="font-mono text-center" style={{ fontSize: 10, color: SILVER, lineHeight: 16 }}>
-                  [ SIN HISTORIAL DE PESO REGISTRADO TODAVÍA ]
-                </Text>
-              </View>
-            ) : (
-              blocks.map(block => (
-                <View key={block.key} style={{ backgroundColor: "#0F0F10", borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: "rgba(255,255,255,0.06)" }}>
-                  <Text className="font-black uppercase" style={{ fontSize: 13, color: "#fff", letterSpacing: 0.5 }}>
-                    MES {block.monthNumber} · {block.label}
-                  </Text>
-                  <Text style={{ fontSize: 12, lineHeight: 17, color: SILVER, marginTop: 6 }}>
-                    {block.netChangeKg === null
-                      ? `${block.entryCount} registro${block.entryCount === 1 ? "" : "s"} de peso este mes — aún no hay suficientes datos para calcular el neto.`
-                      : `Peso neto: ${block.netChangeKg > 0 ? "+" : ""}${block.netChangeKg}kg en el mes · ${block.entryCount} registros`}
-                  </Text>
-                  <MonthPhotoGallery block={block} uploading={uploadingKey === block.key} onAddPhoto={addPhoto} />
-                </View>
-              ))
-            )}
+            <ProgressGallery 
+              photos={photos ?? []} 
+              isLoading={isLoading} 
+              onUploadPhoto={handleUploadPhoto}
+              onEditPhoto={handleEditPhoto}
+              onDeletePhoto={handleDeletePhoto}
+            />
           </ScrollView>
         </View>
       </View>
@@ -328,7 +264,7 @@ function EvolutionModal({ visible, onClose, weightHistory, photos, token, onUplo
 
 export default function StatsScreen() {
   const { student, detail, refresh, isLoading } = usePortal();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const { doneEx } = useWorkout();
 
   // ── Optimistic weight-telemetry overlay (blueprint §1.2 handleWeightLog) ──
@@ -537,10 +473,10 @@ export default function StatsScreen() {
           </View>
           <View style={{ position: "absolute", right: 20 }}>
             <UserAvatar 
-              image={student?.avatarUrl || null} 
-              name={student?.name} 
+              image={user?.image || student?.avatarUrl || null} 
+              name={user?.name || student?.name} 
               size={44} 
-              initials={student?.name ? undefined : "23"}
+              initials={user?.name || student?.name ? undefined : "23"}
             />
           </View>
         </View>
@@ -869,6 +805,8 @@ export default function StatsScreen() {
           </View>
         </View>
 
+        <BiometricsCard />
+
         {/* ── BLOCK C · MAX STRENGTH SCAN — PR sweep bars ── */}
         <View style={BENTO}>
           <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 2, color: SILVER, textTransform: "uppercase" }}>
@@ -1041,7 +979,6 @@ export default function StatsScreen() {
       <EvolutionModal
         visible={showEvolution}
         onClose={() => setShowEvolution(false)}
-        weightHistory={detail?.weightHistory ?? []}
         photos={detail?.photos}
         token={token}
         onUploaded={refresh}

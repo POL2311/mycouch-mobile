@@ -16,17 +16,25 @@
     },
     "ios": {
       "supportsTablet": false,
+      "buildNumber": "13",
       "bundleIdentifier": "com.fellsteam.mycoach",
       "infoPlist": {
         "UIViewControllerBasedStatusBarAppearance": true,
+        "UIBackgroundModes": [
+          "audio",
+          "remote-notification"
+        ],
         "NSMotionUsageDescription": "MyCoach uses motion for premium animations",
         "NSCameraUsageDescription": "MyCoach necesita acceso a la cámara para que puedas tomar y subir fotos de tus progresos físicos y comidas.",
         "NSPhotoLibraryUsageDescription": "MyCoach necesita acceso a tu galería para que puedas seleccionar fotos de tus entrenamientos y perfil.",
         "NSMicrophoneUsageDescription": "MyCoach necesita acceso al micrófono para que puedas grabar notas de audio en Salas.",
+        "NSHealthShareUsageDescription": "MyCouch utiliza Apple Health para sincronizar tus pasos diarios, ritmo cardíaco y calorías quemadas.",
+        "NSHealthUpdateUsageDescription": "MyCouch guarda tus entrenamientos completados en Apple Health.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
+      "versionCode": 13,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#000000"
@@ -50,7 +58,9 @@
         }
       ],
       "expo-video",
-      "expo-audio"
+      "expo-audio",
+      "expo-notifications",
+      "react-native-health"
     ],
     "experiments": {
       "typedRoutes": true

@@ -187,6 +187,8 @@ export default function PortalLayout() {
           {/* Hidden routes — pushed from their respective flows, off the dock */}
           <Tabs.Screen name="exercise" options={{ href: null, tabBarStyle: { display: 'none' } }} />
           <Tabs.Screen name="workout" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+          <Tabs.Screen name="coaches/index" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+          <Tabs.Screen name="quick-workout" options={{ href: null, tabBarStyle: { display: 'none' } }} />
         </Tabs>
         {/* Mount-once celebration overlay — RN <Modal> renders in its own
             native layer above the tab dock regardless of tree position, so

@@ -1845,8 +1845,8 @@ function SyndicateDashboard({ roomName, activeTab, onTab, onLeave, isLeaving, on
 //  SCREEN — the LOBBY ⇄ ROOM_ACTIVE view exchanger
 // ══════════════════════════════════════════════════════════════════════════════
 export default function SalasScreen() {
-  const { token } = useAuth();
-  const { student } = usePortal();
+  const { token, user } = useAuth();
+  const { student, updateStudent } = usePortal();
   const router = useRouter();
   const goBack = useCallback(() => { triggerImpact(); router.replace("/"); }, [router]);
 
@@ -2020,6 +2020,7 @@ export default function SalasScreen() {
     if (result.ok) {
       setServerNotices((result.notices ?? []).filter(n => n.role === "COACH"));
       if (result.coachName) setCurrentRoom({ id: "", name: result.coachName });
+      if (result.coachId) updateStudent({ coachId: result.coachId });
       setCodeSuccess(true);
       setCodeInput("");
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
@@ -2188,9 +2189,9 @@ export default function SalasScreen() {
     <SafeAreaView edges={["top"]} style={{ flex: 1, backgroundColor: OLED }}>
       {currentView === "LOBBY" ? (
         <SalasLobby
-          profileInitials={profileInitials}
-          profileImage={student?.avatarUrl || null}
-          profileName={student?.name || null}
+          profileInitials={user?.name || student?.name ? initialsOf(user?.name || student?.name || "") : "23"}
+          profileImage={user?.image || student?.avatarUrl || null}
+          profileName={user?.name || student?.name}
           onBack={goBack}
           rooms={publicRooms}
           loading={roomsLoading}

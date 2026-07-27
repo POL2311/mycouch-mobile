@@ -18,6 +18,7 @@ import {
 } from "lucide-react-native";
 import Svg, { Defs, LinearGradient, Stop, Rect } from "react-native-svg";
 import { usePortal, uploadProgressPhoto, isSelfCoached, joinCommunityRoom } from "@/lib/portal";
+import { PaywallModal } from "@/components/ui/PaywallModal";
 import { useAuth } from "@/lib/session";
 import { useWorkout, todayDateStr } from "@/lib/workout";
 import { useGamification, RANK_TIERS } from "@/lib/gamification";
@@ -125,9 +126,9 @@ function Toggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
 }
 
 // ── PREFERENCIAS overlay — local theater by design (blueprint §3.3 / sharp
-// edge #3: toggles persist nothing; GUARDAR is a 1.6 s latch) ────────────────
-function SettingsOverlay({ visible, onClose, name, planLabel }: {
-  visible: boolean; onClose: () => void; name: string; planLabel: string;
+// edge #3: toggles persist nothing; GUARDAR es a 1.6 s latch) ────────────────
+function SettingsOverlay({ visible, onClose, name, planLabel, setShowPaywall }: {
+  visible: boolean; onClose: () => void; name: string; planLabel: string; setShowPaywall: (v: boolean) => void;
 }) {
   const [notifWorkout,   setNotifWorkout]   = useState(true);
   const [notifNutrition, setNotifNutrition] = useState(true);
@@ -187,6 +188,14 @@ function SettingsOverlay({ visible, onClose, name, planLabel }: {
           </View>
         ))}
 
+        <TouchableOpacity 
+          style={{ ...GLASS, marginTop: 10, borderRadius: 14, padding: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}
+          onPress={() => setShowPaywall(true)}
+        >
+          <Text style={{ fontSize: 13, fontWeight: "700", color: "#fff" }}>Exportar Estadísticas</Text>
+          <Share2 size={16} color={VOLT} />
+        </TouchableOpacity>
+
         <TouchableOpacity
           activeOpacity={0.8}
           onPress={save}
@@ -235,12 +244,13 @@ function PasswordRule({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
-function IdentityModal({ visible, onClose, student, avatarUrl, token, onRefresh }: {
+function IdentityModal({ visible, onClose, student, avatarUrl, token, onRefresh, updateStudent }: {
   visible: boolean; onClose: () => void;
   student: { name?: string; email?: string; currentWeight?: number } | null;
   avatarUrl: string | null;
   token: string | null;
   onRefresh: () => void;
+  updateStudent: (patch: any) => void;
 }) {
   const [name,   setName]   = useState(student?.name ?? "");
   const [email,  setEmail]  = useState(student?.email ?? "");
@@ -252,6 +262,7 @@ function IdentityModal({ visible, onClose, student, avatarUrl, token, onRefresh 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
+  const { updateProfile } = useAuth();
 
   useEffect(() => {
     if (!visible) return;
@@ -283,8 +294,18 @@ function IdentityModal({ visible, onClose, student, avatarUrl, token, onRefresh 
     setUploadingAvatar(true);
     const uploaded = await uploadProgressPhoto(result.assets[0].uri, "AVATAR", token);
     setUploadingAvatar(false);
-    if (uploaded) { triggerSuccess(); onRefresh(); } else { triggerWarning(); }
-  }, [token, onRefresh]);
+    if (uploaded) { 
+      triggerSuccess();
+      // Force cache bust on the new URL
+      const bustedUrl = `${uploaded.url}?t=${Date.now()}`;
+      await updateProfile({ image: bustedUrl }).catch(() => {});
+      // Also update portal context so headers update instantly
+      updateStudent({ avatarUrl: bustedUrl });
+      onRefresh();
+    } else { 
+      triggerWarning(); 
+    }
+  }, [token, onRefresh, updateProfile]);
 
   const save = useCallback(async () => {
     setSaving(true);
@@ -651,11 +672,13 @@ function TelemetryLogModal({ visible, onClose, loading, history }: {
 //  SCREEN
 // ══════════════════════════════════════════════════════════════════════════════
 export default function PerfilScreen() {
-  const { student, detail, isLoading, refresh } = usePortal();
-  const { token, logout } = useAuth();
+  const { student, detail, isLoading, refresh, updateStudent } = usePortal();
+  const { token, logout, user } = useAuth();
   const { doneEx, allDone } = useWorkout();
   const { totalXP, currentRank, progressPct, nextThresholdXP, addXP } = useGamification();
   const insets = useSafeAreaInsets();
+  
+  const [showPaywall, setShowPaywall] = useState(false);
 
   const streak = student?.streak ?? 0;
   const stage  = student?.stage ?? "Definición";
@@ -755,7 +778,6 @@ export default function PerfilScreen() {
   const todayActive    = doneEx.size > 0;
   const isDayDone = (dayId: number) =>
     dayId === activeDayIndex ? todayActive : dayId < activeDayIndex && activeDayIndex - dayId <= streak;
-
   // ── Wallet (read-only rail; hydrated like the web root, fallback 0) ──────
   const [walletBalance, setWalletBalance] = useState(0);
   useEffect(() => {
@@ -764,6 +786,10 @@ export default function PerfilScreen() {
       .then(d => setWalletBalance(d.student?.walletBalance ?? 0))
       .catch(() => {});
   }, [token]);
+
+  // ── Sincronización Global de Avatar (Módulo 1) ───────────
+  // Reemplazamos la convención local de fotos por la fuente de verdad global y reactiva
+  const avatarUrl = user?.image ?? null;
 
   // ── Bitácora Táctica (real: WorkoutSession + WorkoutBiometrics) ───────────
   const [bioHistory, setBioHistory] = useState<BioSession[]>([]);
@@ -784,11 +810,6 @@ export default function PerfilScreen() {
   const selfCoachedStudent = isSelfCoached(student);
   const [showTelemetry,  setShowTelemetry]  = useState(false);
 
-  // Avatar activo (Módulo 5) — la foto AVATAR más reciente entre las fotos
-  // reales de detail.photos (mismo dato que alimenta la galería mensual de
-  // Módulo 4). El schema de Student no tiene un campo de foto de perfil
-  // propio, así que "cuál es el avatar" es una convención de cliente.
-  const avatarUrl = detail?.photos?.find(p => p.label === "AVATAR")?.url ?? null;
 
   const shareBadge = useCallback(async () => {
     triggerImpact();
@@ -1195,6 +1216,33 @@ export default function PerfilScreen() {
             </View>
             <Text style={{ fontSize: 14, color: SILVER }}>›</Text>
           </TouchableOpacity>
+          
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() => {
+              if (!student?.coachId) {
+                setShowPaywall(true);
+              } else {
+                triggerSuccess();
+                alert("Simulación: Reporte Exportado");
+              }
+            }}
+            style={{
+              flexDirection: "row", alignItems: "center", padding: 16, backgroundColor: "rgba(255,255,255,0.02)",
+              borderRadius: 16, borderWidth: 1, borderColor: "rgba(255,255,255,0.06)", marginTop: 12
+            }}
+          >
+            <View style={{ width: 32, height: 32, borderRadius: 8, backgroundColor: "rgba(255,255,255,0.05)", alignItems: "center", justifyContent: "center", marginRight: 12 }}>
+              <Lock size={16} color={VOLT} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ ...athletic, fontSize: 13, color: "#fff" }}>Exportar Reportes Avanzados</Text>
+              <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 0.5, color: SILVER, marginTop: 2 }}>
+                PDF Y EXCEL (VERSIÓN PRO)
+              </Text>
+            </View>
+            <Text style={{ fontSize: 14, color: SILVER }}>›</Text>
+          </TouchableOpacity>
         </View>
 
         {/* ── 9 · Logout command latch — the ONLY session-destruction surface
@@ -1328,6 +1376,7 @@ export default function PerfilScreen() {
         onClose={() => setShowSettings(false)}
         name={student?.name ?? "—"}
         planLabel={stage === "Volumen" ? "Plan Berserker" : "Plan Performance"}
+        setShowPaywall={setShowPaywall}
       />
 
       {/* ── IDENTIDAD Y SEGURIDAD overlay (Módulo 5) ── */}
@@ -1335,9 +1384,10 @@ export default function PerfilScreen() {
         visible={showIdentity}
         onClose={() => setShowIdentity(false)}
         student={student}
-        avatarUrl={avatarUrl}
+        avatarUrl={user?.image || student?.avatarUrl || null}
         token={token}
         onRefresh={refresh}
+        updateStudent={updateStudent}
       />
 
       {/* ── VINCULAR CON UN COACH (Módulo 1 — mitad real de "UNIRME A UN COACH") ── */}
@@ -1354,6 +1404,14 @@ export default function PerfilScreen() {
         onClose={() => setShowTelemetry(false)}
         loading={bioLoading}
         history={bioHistory}
+      />
+
+      {/* Paywall Interception */}
+      <PaywallModal 
+        visible={showPaywall} 
+        onClose={() => setShowPaywall(false)}
+        title="REPORTES AVANZADOS"
+        description="Exportar tus estadísticas a PDF/Excel requiere la versión PRO. Actualiza ahora o vincula a un Coach para desbloquear todas las métricas."
       />
     </SafeAreaView>
   );

@@ -7,6 +7,7 @@ import { router } from "expo-router";
 import { ChevronLeft } from "lucide-react-native";
 import { useState, useCallback } from "react";
 import { useAuth } from "@/lib/session";
+import Svg, { Path } from "react-native-svg";
 
 const VOLT   = "#CCFF00";
 const SILVER = "#8e8e93";
@@ -30,7 +31,7 @@ const DEMO_ACCOUNTS = [
 // landing screen's "¿Ya tienes una cuenta?" link and the onboarding wizard's
 // finish actions both need somewhere real to land. ──────────────────────────
 export default function LoginScreen() {
-  const { login } = useAuth();
+  const { login, loginWithGoogle } = useAuth();
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
   const [error,    setError]    = useState<string | null>(null);
@@ -110,7 +111,27 @@ export default function LoginScreen() {
               : <Text style={{ ...athletic, fontSize: 14, color: "#000" }}>Entrar</Text>}
           </TouchableOpacity>
 
-          <Text style={{ fontSize: 10, letterSpacing: 1, color: "#52525b", textAlign: "center", marginTop: 32, marginBottom: 10 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", marginVertical: 24 }}>
+            <View style={{ flex: 1, height: 1, backgroundColor: "rgba(255,255,255,0.1)" }} />
+            <Text style={{ marginHorizontal: 12, color: SILVER, fontSize: 10, letterSpacing: 1 }}>O</Text>
+            <View style={{ flex: 1, height: 1, backgroundColor: "rgba(255,255,255,0.1)" }} />
+          </View>
+
+          <TouchableOpacity
+            activeOpacity={0.85}
+            disabled={loading}
+            onPress={loginWithGoogle}
+            style={{
+              height: 54, borderRadius: 27, backgroundColor: "rgba(255,255,255,0.05)",
+              borderWidth: 1, borderColor: "rgba(255,255,255,0.15)",
+              alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 12,
+            }}
+          >
+            <Text style={{ fontSize: 16 }}>🌐</Text>
+            <Text style={{ fontSize: 14, fontWeight: "600", color: "#fff" }}>Continuar con Google</Text>
+          </TouchableOpacity>
+
+          <Text style={{ fontSize: 10, letterSpacing: 1, color: "#52525b", textAlign: "center", marginTop: 40, marginBottom: 10 }}>
             ACCESO RÁPIDO — CUENTAS DE DEMO
           </Text>
           <View style={{ flexDirection: "row", gap: 8 }}>

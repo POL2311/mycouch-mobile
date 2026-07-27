@@ -104,20 +104,41 @@ function YouTubePlayer({ videoId, originalUrl }: { videoId: string, originalUrl:
       {error ? (
         <FallbackLinkPlayer url={originalUrl} />
       ) : (
-        <WebView
-          source={{ uri: formatYouTubeUrl(videoId) }}
-          style={StyleSheet.absoluteFill}
-          allowsInlineMediaPlayback={true}
-          mediaPlaybackRequiresUserAction={false}
-          allowsFullscreenVideo={true}
-          originWhitelist={['*']}
-          userAgent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
-          onLoadEnd={() => setLoading(false)}
-          onError={() => setError(true)}
-          onHttpError={() => setError(true)}
-          javaScriptEnabled
-          domStorageEnabled
-        />
+        <>
+          <WebView
+            source={{ uri: formatYouTubeUrl(videoId) }}
+            style={{ flex: 1 }}
+            allowsInlineMediaPlayback={true}
+            mediaPlaybackRequiresUserAction={false}
+            allowsFullscreenVideo={true}
+            originWhitelist={['*']}
+            userAgent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+            onLoadEnd={() => setLoading(false)}
+            onError={() => setError(true)}
+            onHttpError={() => setError(true)}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+          />
+          {/* Overlay Button for Fallback */}
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => {
+              triggerImpact();
+              Linking.openURL(originalUrl).catch(() => {});
+            }}
+            style={{
+              position: "absolute", bottom: 12, left: 16, right: 16,
+              flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10,
+              backgroundColor: "rgba(0,0,0,0.8)", borderRadius: 16, paddingVertical: 12,
+              borderWidth: 1, borderColor: "rgba(255,255,255,0.1)",
+            }}
+          >
+            <Play size={16} color="#fff" fill="#fff" />
+            <Text style={{ fontSize: 12, fontWeight: "700", color: "#fff", letterSpacing: 0.5 }}>
+              ▶️ Abrir Video en la App de YouTube
+            </Text>
+          </TouchableOpacity>
+        </>
       )}
     </View>
   );

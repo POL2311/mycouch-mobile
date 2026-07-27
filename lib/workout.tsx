@@ -5,6 +5,7 @@ import * as Haptics from "expo-haptics";
 import { usePortal } from "@/lib/portal";
 import { useSelfCoach } from "@/lib/selfCoach";
 import { useAuth } from "@/lib/session";
+import { useAppleHealth } from "@/lib/health";
 import { api } from "@/lib/api";
 import { triggerImpact, triggerSuccess } from "@/lib/haptics";
 import type { RoutineExercise, RoutineDay } from "@/lib/portal";
@@ -59,16 +60,17 @@ export function todayDateStr() {
 // the week — it must not silently replay on every day. `RoutineDay.dayIndex`
 // carries the mobile portal's passthrough of the web's `weekday` pin
 // (0=Sun…6=Sat, JS Date#getDay convention) when the coach set one. ──────────
-function resolveRoutineDay(days: RoutineDay[]): RoutineDay | undefined {
+function resolveRoutineDay(days: RoutineDay[], targetJsWeekday: number = new Date().getDay()): RoutineDay | undefined {
   if (days.length === 0) return undefined;
-  const jsWeekday = new Date().getDay();                       // 0=Sun…6=Sat
-  const explicit  = days.find(d => d.dayIndex === jsWeekday);
+  const explicit  = days.find(d => d.dayIndex === targetJsWeekday);
   if (explicit) return explicit;
-  const appDayIdx = jsWeekday === 0 ? 7 : jsWeekday;            // 1=Mon…7=Sun
+  const appDayIdx = targetJsWeekday === 0 ? 7 : targetJsWeekday;            // 1=Mon…7=Sun
   return days[appDayIdx - 1];                                   // ordinal, no wrap
 }
 
 interface WorkoutState {
+  activeDay:      number;
+  setActiveDay:   (d: number) => void;
   exercises:      RoutineExercise[];
   routineName:    string;
   dayLabel:       string;
@@ -163,8 +165,14 @@ export function WorkoutProvider({ children }: { children: React.ReactNode }) {
   // dieta asignada".
   const hasAnyRoutine = routineAssigned || isSelfPlan;
 
+  const [activeDay, setActiveDay] = useState<number>(() => {
+    const d = new Date().getDay();
+    return d === 0 ? 7 : d;
+  });
+
   const routineDays = effectiveRoutine?.days ?? [];
-  const todayDay    = resolveRoutineDay(routineDays);
+  const activeJsWeekday = activeDay === 7 ? 0 : activeDay;
+  const todayDay    = resolveRoutineDay(routineDays, activeJsWeekday);
   // No mock backfill: an unresolved day or an empty exercises[] both mean the
   // coach has not assigned programming for today — totalEx===0 downstream
   // drives the tactical empty state instead of a fabricated split.
@@ -239,18 +247,19 @@ export function WorkoutProvider({ children }: { children: React.ReactNode }) {
   }, [lifecycle, watchStatus]);
   useEffect(() => () => { if (watchRef.current) clearTimeout(watchRef.current); }, []);
 
-  // NATIVE_BRIDGE: Simulated heart rate — replace with the HealthKit observer.
-  // Gated on the pairing channel: no wearable subscription, no telemetry.
+  const isTracking = lifecycle === "ACTIVE_TRACKING" || lifecycle === "PAUSED";
+  const { heartRate, activeKcal, hasPermissions } = useAppleHealth(isTracking);
+
   useEffect(() => {
-    if (lifecycle !== "ACTIVE_TRACKING" || watchStatus !== "CONNECTED") return;
+    if (!isTracking || watchStatus !== "CONNECTED") return;
     setBiometrics(prev => ({
       ...prev,
-      avgHeartRate:   142,
-      maxHeartRate:   158,
-      activeCalories: Math.floor(wDuration * 0.12),
-      deviceSource:   "Apple Watch",
+      avgHeartRate: heartRate || 0,
+      maxHeartRate: heartRate && heartRate > prev.maxHeartRate ? heartRate : prev.maxHeartRate,
+      activeCalories: activeKcal || 0,
+      deviceSource: hasPermissions ? "Apple Watch" : "—",
     }));
-  }, [lifecycle, watchStatus, wDuration]);
+  }, [isTracking, watchStatus, heartRate, activeKcal, hasPermissions]);
 
   // ── Mount: hydrate from cache ─────────────────────────────────────────────
   useEffect(() => {
@@ -521,6 +530,7 @@ export function WorkoutProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <WorkoutContext.Provider value={{
+      activeDay, setActiveDay,
       exercises, routineName, dayLabel, dayFocus, semanaLabel, totalEx, hasAssignment, hasAnyRoutine, isSelfPlan, isLoading: portalLoading,
       lifecycle, setLifecycle, watchStatus, doneSets, doneEx, setDoneEx, wDuration, biometrics,
       workoutDone, setWorkoutDone, activeExIdx, setActiveExIdx, restOn, restSecs, restTotal,

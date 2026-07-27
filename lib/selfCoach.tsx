@@ -38,6 +38,8 @@ interface SelfCoachState {
   localDietBridge:    PortalDetail["diet"] | null;
   applyRoutineTemplate: (tpl: StoredRoutineTemplate) => Promise<void>;
   applyDietTemplate:    (tpl: StoredDietTemplate) => Promise<void>;
+  applyBaseRoutine:     (routine: RoutineJson) => Promise<void>;
+  applyBaseDiet:        (diet: DietaJson) => Promise<void>;
   clearRoutine: () => Promise<void>;
   clearDiet:    () => Promise<void>;
 }
@@ -73,6 +75,16 @@ export function SelfCoachProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.setItem(LOCAL_DIET_KEY, JSON.stringify(parsed)).catch(() => {});
   }, []);
 
+  const applyBaseRoutine = useCallback(async (routine: RoutineJson) => {
+    setLocalRoutine(routine);
+    await AsyncStorage.setItem(LOCAL_ROUTINE_KEY, JSON.stringify(routine)).catch(() => {});
+  }, []);
+
+  const applyBaseDiet = useCallback(async (diet: DietaJson) => {
+    setLocalDiet(diet);
+    await AsyncStorage.setItem(LOCAL_DIET_KEY, JSON.stringify(diet)).catch(() => {});
+  }, []);
+
   const clearRoutine = useCallback(async () => {
     setLocalRoutine(null);
     await AsyncStorage.removeItem(LOCAL_ROUTINE_KEY).catch(() => {});
@@ -89,7 +101,7 @@ export function SelfCoachProvider({ children }: { children: React.ReactNode }) {
   return (
     <SelfCoachContext.Provider value={{
       localRoutine, localDiet, localRoutineBridge, localDietBridge,
-      applyRoutineTemplate, applyDietTemplate, clearRoutine, clearDiet,
+      applyRoutineTemplate, applyDietTemplate, applyBaseRoutine, applyBaseDiet, clearRoutine, clearDiet,
     }}>
       {children}
     </SelfCoachContext.Provider>

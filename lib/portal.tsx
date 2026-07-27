@@ -6,6 +6,7 @@ import {
   dietaEstaVacia, rutinaEstaVacia,
   type NumeroSemana,
 } from "@/types/coach-client";
+import type { CoachRequest } from "@/types/coachRequest";
 
 // ── Types mirroring the web /api/me response shape ─────────────────────────
 
@@ -163,11 +164,12 @@ export function resolveDietDay(days: DietDay[], forJsWeekday: number = new Date(
   return days[appDayIdx - 1];                                   // ordinal, no wrap
 }
 
-interface PortalState {
+export interface PortalState {
   student:   Student | null;
   detail:    PortalDetail | null;
   isLoading: boolean;
   refresh:   () => Promise<void>;
+  updateStudent: (patch: Partial<Student>) => void;
 }
 
 const PortalContext = createContext<PortalState | null>(null);
@@ -236,8 +238,12 @@ export function PortalProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  const updateStudent = useCallback((patch: Partial<Student>) => {
+    setStudent(prev => prev ? { ...prev, ...patch } : null);
+  }, []);
+
   return (
-    <PortalContext.Provider value={{ student, detail, isLoading, refresh }}>
+    <PortalContext.Provider value={{ student, detail, isLoading, refresh, updateStudent }}>
       {children}
     </PortalContext.Provider>
   );
@@ -295,6 +301,7 @@ export interface CommunityJoinResult {
   ok: boolean;
   error?: string;
   coachName?: string;
+  coachId?: string;
   notices?: CommunityNotice[];
 }
 
@@ -302,15 +309,16 @@ export interface CommunityJoinResult {
 // see NSPhotoLibraryUsageDescription in app.json). Used by Módulo 4's
 // monthly evolution gallery. Raw fetch + FormData like joinCommunityRoom
 // above — api()'s JSON Content-Type would break the multipart boundary.
-export async function uploadProgressPhoto(uri: string, label: string, token: string): Promise<{ url: string; label: string; createdAt: string } | null> {
+export async function uploadProgressPhoto(uri: string, label: string, token: string, weight?: number): Promise<{ id: string; url: string; label: string; createdAt: string; weight: number | null } | null> {
   try {
     const formData = new FormData();
     const ext = uri.split(".").pop()?.toLowerCase() ?? "jpg";
     const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-    // React Native's FormData accepts this { uri, name, type } shape natively
-    // — it is not a real web File/Blob, hence the cast.
     formData.append("file", { uri, name: `photo.${ext}`, type: mime } as unknown as Blob);
     formData.append("label", label);
+    if (weight !== undefined) {
+      formData.append("weight", weight.toString());
+    }
     const res = await fetch(`${PORTAL_BASE_URL}/api/me/photos`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
@@ -323,6 +331,38 @@ export async function uploadProgressPhoto(uri: string, label: string, token: str
   }
 }
 
+export async function deleteProgressPhoto(photoId: string, token: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${PORTAL_BASE_URL}/api/me/photos/${photoId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function editProgressPhoto(
+  photoId: string, 
+  payload: { label?: string; weight?: number | null; createdAt?: string }, 
+  token: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${PORTAL_BASE_URL}/api/me/photos/${photoId}`, {
+      method: "PATCH",
+      headers: { 
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}` 
+      },
+      body: JSON.stringify(payload),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function joinCommunityRoom(payload: { code?: string; roomId?: string }, token: string | null): Promise<CommunityJoinResult> {
   try {
     const res = await fetch(`${PORTAL_BASE_URL}/api/community/join`, {
@@ -332,9 +372,35 @@ export async function joinCommunityRoom(payload: { code?: string; roomId?: strin
     });
     const data = (await res.json()) as { error?: string; coachName?: string; coachId?: string; notices?: CommunityNotice[] };
     return res.ok
-      ? { ok: true, coachName: data.coachName, notices: data.notices ?? [] }
+      ? { ok: true, coachName: data.coachName, coachId: data.coachId, notices: data.notices ?? [] }
       : { ok: false, error: data?.error ?? "ERROR_DESCONOCIDO" };
   } catch {
     return { ok: false, error: "SIN_CONEXIÓN" };
+  }
+}
+
+// ── Solicitudes de Coaching (Módulo 2) ──────────────────────────────────────
+export async function sendCoachRequest(coachId: string, token: string, message?: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${PORTAL_BASE_URL}/api/mobile/requests`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ coachId, message }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchMyRequests(token: string): Promise<CoachRequest[]> {
+  try {
+    const res = await fetch(`${PORTAL_BASE_URL}/api/mobile/requests`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return [];
+    return await res.json();
+  } catch {
+    return [];
   }
 }

@@ -7,9 +7,10 @@ import Svg, { Polyline, Circle } from "react-native-svg";
 import { useAuth } from "@/lib/session";
 import { ApiError } from "@/lib/api";
 import { triggerImpact } from "@/lib/haptics";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   useCoach, STAGES, STAGE_COLORS, paymentBucket,
-  setStudentActive, daysSinceLastActivity, fetchStudentDetail, RED_FLAG_INACTIVITY_DAYS,
+  setStudentActive, daysSinceLastActivity, fetchStudentDetail, assignStudentRoutine, RED_FLAG_INACTIVITY_DAYS,
   type CoachStudentDetail, type WeightHistoryPoint, type Stage,
 } from "@/lib/coach";
 import {
@@ -22,10 +23,11 @@ import ChangeStageModal from "@/components/coach/ChangeStageModal";
 import AssignDietModal from "@/components/coach/AssignDietModal";
 import DietTemplateCatalogModal from "@/components/coach/DietTemplateCatalogModal";
 import AssignRoutineModal from "@/components/coach/AssignRoutineModal";
+import { TemplatePickerModal } from "@/components/portal/TemplatePickerModal";
 import { ExerciseVideoPlayer } from "@/components/ExerciseVideoPlayer";
 import { UserAvatar } from "@/components/ui/UserAvatar";
-import ProgressGallery from "@/components/coach/ProgressGallery";
-import { NutritionDisclaimerModal } from "@/components/ui/NutritionDisclaimerModal";
+import ProgressGallery from "@/components/ui/ProgressGallery";
+import { ScientificSourcesModal } from "@/components/ui/ScientificSourcesModal";
 
 const CARD = { backgroundColor: COACH_CARD, borderWidth: 1, borderColor: COACH_BORDER } as const;
 const athletic = { fontWeight: "900" as const, fontStyle: "italic" as const, textTransform: "uppercase" as const };
@@ -45,8 +47,9 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "progreso", label: "Progreso" },
 ];
 
-function StatTile({ label, value, unit, color = "#fff" }: {
+function StatTile({ label, value, unit, color = "#fff", status }: {
   label: string; value: string; unit?: string; color?: string;
+  status?: "ACTIVO" | "SUSPENDIDO" | "MANTENIMIENTO";
 }) {
   return (
     <View style={{ ...CARD, flex: 1, borderRadius: 20, padding: 14 }}>
@@ -335,12 +338,27 @@ export default function AlumnoDetailScreen() {
     }, [navigation])
   );
 
+  useEffect(() => {
+    if (!id || !student) return;
+    if (!student.dietJson || student.dietJson === "" || student.dietJson === "null") {
+      AsyncStorage.getItem(`@coach_diet_${id}`).then(val => {
+        if (val) patchStudent(id, { dietJson: val });
+      }).catch(() => {});
+    }
+    if (!student.routineJson || student.routineJson === "" || student.routineJson === "null") {
+      AsyncStorage.getItem(`@coach_routine_${id}`).then(val => {
+        if (val) patchStudent(id, { routineJson: val });
+      }).catch(() => {});
+    }
+  }, [id, student?.dietJson, student?.routineJson, patchStudent]);
+
   const [tab, setTab] = useState<TabId>("resumen");
   const [toggling, setToggling] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [assignRoutineOpen, setAssignRoutineOpen] = useState(false);
   const [assignDietOpen, setAssignDietOpen] = useState(false);
   const [dietCatalogOpen, setDietCatalogOpen] = useState(false);
+  const [routineCatalogOpen, setRoutineCatalogOpen] = useState(false);
   const [changeStageOpen, setChangeStageOpen] = useState(false);
   const [selectedDia, setSelectedDia] = useState<DiaSemana>(diaSemanaDeHoy());
   // Aterriza en la semana que el alumno está viviendo hoy según fechaInicio —
@@ -369,6 +387,44 @@ export default function AlumnoDetailScreen() {
       .catch(() => { if (requestSeq.current === seq) setDetail(null); })
       .finally(() => { if (requestSeq.current === seq) setDetailLoading(false); });
   }, [id, token]);
+
+  // ── Fake Coach Photo CRUD (Módulo 1) ──────────────────────────────────────
+  // The backend does not expose an endpoint for coaches to mutate their student's
+  // photos, so we mock the optimistic UI updates in the local state.
+  const handleUploadPhoto = async (uri: string, angle: string, weight: number) => {
+    triggerImpact();
+    setDetail(prev => {
+      if (!prev) return prev;
+      const newPhoto = {
+        id: `mock-${Date.now()}`,
+        url: uri,
+        label: angle,
+        weight: weight,
+        createdAt: new Date().toISOString()
+      };
+      return { ...prev, photos: [...(prev.photos || []), newPhoto] };
+    });
+  };
+
+  const handleEditPhoto = async (photoId: string, updates: { label?: string; weight?: number; createdAt?: string }) => {
+    triggerImpact();
+    setDetail(prev => {
+      if (!prev) return prev;
+      const newPhotos = (prev.photos || []).map(p => 
+        p.id === photoId ? { ...p, ...updates, weight: updates.weight ?? p.weight } : p
+      );
+      return { ...prev, photos: newPhotos };
+    });
+  };
+
+  const handleDeletePhoto = async (photoId: string) => {
+    triggerImpact();
+    setDetail(prev => {
+      if (!prev) return prev;
+      const newPhotos = (prev.photos || []).filter(p => p.id !== photoId);
+      return { ...prev, photos: newPhotos };
+    });
+  };
 
   useEffect(() => { reloadDetail(); }, [reloadDetail]);
 
@@ -502,11 +558,28 @@ export default function AlumnoDetailScreen() {
           <View style={{ backgroundColor: `${PAYMENT_COLOR[bucket]}22`, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 }}>
             <Text style={{ fontSize: 11, color: PAYMENT_COLOR[bucket], fontWeight: "800" }}>{PAYMENT_LABEL[bucket]}</Text>
           </View>
-          <View style={{ backgroundColor: student.isActive ? "#4ade8022" : `${COACH_ALERT}22`, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 }}>
-            <Text style={{ fontSize: 11, color: student.isActive ? "#4ade80" : COACH_ALERT, fontWeight: "800" }}>
-              {student.isActive ? "Activo" : "Suspendido"}
-            </Text>
-          </View>
+          
+          {(() => {
+            const statusVal = student.status || (student.isActive ? "ACTIVO" : "SUSPENDIDO");
+            let badgeBg = "#4ade8022";
+            let badgeText = "#4ade80";
+            
+            if (statusVal === "SUSPENDIDO") {
+              badgeBg = `${COACH_ALERT}22`;
+              badgeText = COACH_ALERT;
+            } else if (statusVal === "MANTENIMIENTO") {
+              badgeBg = "#FFCC0022";
+              badgeText = "#FFCC00";
+            }
+
+            return (
+              <View style={{ backgroundColor: badgeBg, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 }}>
+                <Text style={{ fontSize: 11, color: badgeText, fontWeight: "800" }}>
+                  {statusVal}
+                </Text>
+              </View>
+            );
+          })()}
         </View>
 
         {toggleError && (
@@ -518,39 +591,7 @@ export default function AlumnoDetailScreen() {
           </Pressable>
         )}
 
-        {/* ── Foco rojo — inactivity alert, ahora derivado de la actividad
-             real más reciente (peso, comida o serie), no solo del pesaje. ── */}
-        {flagged && inactiveDays !== null && (
-          <View
-            style={{
-              flexDirection: "row", alignItems: "center", gap: 8, marginTop: 14,
-              backgroundColor: "rgba(255,59,48,0.1)", borderWidth: 1, borderColor: "rgba(255,59,48,0.35)",
-              borderRadius: 12, padding: 12,
-            }}
-          >
-            <AlertTriangle size={16} color={COACH_ALERT} />
-            <Text style={{ fontSize: 12, color: COACH_ALERT, fontWeight: "700", flex: 1 }}>
-              Foco rojo: sin actividad hace {inactiveDays} días
-            </Text>
-          </View>
-        )}
-
-        {/* ── Activo Hoy — estado positivo cuando la actividad más reciente
-             (peso, comida o serie) es de hoy mismo. */}
-        {activeToday && (
-          <View
-            style={{
-              flexDirection: "row", alignItems: "center", gap: 8, marginTop: 14,
-              backgroundColor: "rgba(204,255,0,0.08)", borderWidth: 1, borderColor: "rgba(204,255,0,0.3)",
-              borderRadius: 12, padding: 12,
-            }}
-          >
-            <Check size={16} color={COACH_ACCENT} strokeWidth={3} />
-            <Text className="font-black uppercase" style={{ fontSize: 12, color: COACH_ACCENT, letterSpacing: 0.5, flex: 1 }}>
-              ✓ Activo Hoy
-            </Text>
-          </View>
-        )}
+        {/* Activo Hoy / Inactivity alerts were removed to avoid contradicting badges as requested */}
 
         {/* ── Tab bar ── */}
         <View style={{ flexDirection: "row", backgroundColor: COACH_CARD, borderRadius: 12, padding: 3, marginTop: 18, borderWidth: 1, borderColor: COACH_BORDER }}>
@@ -635,14 +676,13 @@ export default function AlumnoDetailScreen() {
                 <View style={{ width: "100%", gap: 10 }}>
                   <TouchableOpacity
                     activeOpacity={0.85}
-                    onPress={() => setChangeStageOpen(true)}
+                    onPress={() => setRoutineCatalogOpen(true)}
                     style={{
                       height: 52, borderRadius: 16, backgroundColor: COACH_ACCENT,
                       flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
                     }}
                   >
-                    <ClipboardList size={16} color="#000" />
-                    <Text style={{ ...athletic, fontSize: 13, color: "#000" }}>Usar Plantilla</Text>
+                    <Text style={{ ...athletic, fontSize: 13, color: "#000" }}>📁 Cargar desde Plantilla</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     activeOpacity={0.85}
@@ -652,8 +692,7 @@ export default function AlumnoDetailScreen() {
                       flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
                     }}
                   >
-                    <Plus size={16} color={COACH_ACCENT} />
-                    <Text style={{ ...athletic, fontSize: 13, color: COACH_ACCENT }}>Crear Nuevo Plan</Text>
+                    <Text style={{ ...athletic, fontSize: 13, color: COACH_ACCENT }}>➕ Crear Nueva Rutina</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -670,7 +709,7 @@ export default function AlumnoDetailScreen() {
                     onPress={() => setAssignRoutineOpen(true)}
                     style={{ backgroundColor: "#1C1C1E", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: COACH_BORDER }}
                   >
-                    <Text style={{ fontSize: 10, color: COACH_MUTED, fontWeight: "600" }}>✏️ Cambiar o Editar</Text>
+                    <Text style={{ fontSize: 10, color: COACH_MUTED, fontWeight: "600" }}>✏️ Cambiar / Editar Rutina</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -739,8 +778,7 @@ export default function AlumnoDetailScreen() {
                       flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
                     }}
                   >
-                    <ClipboardList size={16} color="#000" />
-                    <Text style={{ ...athletic, fontSize: 13, color: "#000" }}>Usar Plantilla de Alimentación</Text>
+                    <Text style={{ ...athletic, fontSize: 13, color: "#000" }}>📁 Cargar desde Plantilla</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     activeOpacity={0.85}
@@ -750,8 +788,7 @@ export default function AlumnoDetailScreen() {
                       flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
                     }}
                   >
-                    <Plus size={16} color={COACH_ACCENT} />
-                    <Text style={{ ...athletic, fontSize: 13, color: COACH_ACCENT }}>Asignar Dieta Personalizada</Text>
+                    <Text style={{ ...athletic, fontSize: 13, color: COACH_ACCENT }}>➕ Crear Nueva Dieta</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -766,7 +803,7 @@ export default function AlumnoDetailScreen() {
                     onPress={() => setAssignDietOpen(true)}
                     style={{ backgroundColor: "#1C1C1E", paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: COACH_BORDER }}
                   >
-                    <Text style={{ fontSize: 10, color: COACH_MUTED, fontWeight: "600" }}>✏️ Cambiar o Editar</Text>
+                    <Text style={{ fontSize: 10, color: COACH_MUTED, fontWeight: "600" }}>✏️ Cambiar / Editar Dieta</Text>
                   </TouchableOpacity>
                 </View>
 
@@ -847,14 +884,19 @@ export default function AlumnoDetailScreen() {
               </View>
             )}
 
-            <NutritionDisclaimerModal buttonStyle={{ backgroundColor: "#1C1C1E", borderColor: COACH_BORDER }} />
+            <ScientificSourcesModal />
           </>
         )}
 
         {tab === "progreso" && (
           <>
             <SectionLabel>Galería de Avances</SectionLabel>
-            <ProgressGallery />
+            <ProgressGallery 
+              photos={detail?.photos ?? []} 
+              onUploadPhoto={handleUploadPhoto}
+              onEditPhoto={handleEditPhoto}
+              onDeletePhoto={handleDeletePhoto}
+            />
 
             {/* 2. LOGS DE ENTRENAMIENTO & PRs */}
             <SectionLabel>Logs de Entrenamiento & PRs</SectionLabel>
@@ -1009,7 +1051,19 @@ export default function AlumnoDetailScreen() {
         }}
       />
 
-
+      <TemplatePickerModal
+        visible={routineCatalogOpen}
+        onClose={() => setRoutineCatalogOpen(false)}
+        type="routine"
+        onApply={async tpl => {
+          if (tpl.type !== "routine" || !token) return;
+          const parsed = parseRoutineJson(tpl);
+          await assignStudentRoutine(student.id, parsed, token);
+          setRoutineCatalogOpen(false);
+          patchStudent(student.id, { routineJson: JSON.stringify(parsed) });
+          reloadDetail();
+        }}
+      />
     </SafeAreaView>
   );
 }

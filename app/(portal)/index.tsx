@@ -8,7 +8,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { PulseButton } from "@/components/ui/PulseButton";
 import { NeonGlowView } from "@/components/ui/NeonGlowView";
 import { ShimmerScreen } from "@/components/ShimmerLoader";
-import { Play, Pause, Check, Moon, Salad, Plus } from "lucide-react-native";
+import { Play, Pause, Check, Moon, Salad, Plus, Search, Edit2 } from "lucide-react-native";
 import { BlurView } from "expo-blur";
 import Svg, { Defs, LinearGradient, Stop, Rect } from "react-native-svg";
 import { useAuth } from "@/lib/session";
@@ -22,6 +22,9 @@ import { triggerImpact, triggerSuccess } from "@/lib/haptics";
 import { UserAvatar } from "@/components/ui/UserAvatar";
 import { VOLT, WATER_TARGET_ML, WATER_DOSE_ML } from "@/components/workout-ui";
 import { TemplatePickerModal } from "@/components/portal/TemplatePickerModal";
+import { EnterCoachCodeModal } from "@/components/portal/EnterCoachCodeModal";
+import { generateBaseRoutinePlan } from "@/lib/routineGenerator";
+import { generateBaseNutritionPlan } from "@/lib/nutritionGenerator";
 
 // ── Cinema Bento card imagery — placeholder gym stock photography keyed by
 // muscle group, until the coach exercise catalog reliably supplies imageUrl.
@@ -77,6 +80,49 @@ const GLASS = {
 // expo-font wires the real asset.
 const athletic = { fontWeight: "900" as const, fontStyle: "italic" as const, textTransform: "uppercase" as const };
 
+const WEEKDAY_PILLS = ["L", "M", "MI", "J", "V", "S", "D"] as const;
+
+function WeekdayStrip({ activeDay, onSelect }: {
+  activeDay: number;
+  onSelect: (day: number) => void;
+}) {
+  return (
+    <View
+      style={{
+        flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+        marginHorizontal: GUTTER, marginTop: 16, gap: 6,
+        backgroundColor: "rgba(24,24,27,0.4)", padding: 6,
+        borderWidth: 1, borderColor: "rgba(255,255,255,0.08)", borderRadius: 16,
+      }}
+    >
+      {WEEKDAY_PILLS.map((label, i) => {
+        const dayNum = i + 1;
+        const isActive = activeDay === dayNum;
+        return (
+          <TouchableOpacity
+            key={dayNum}
+            activeOpacity={0.8}
+            onPress={() => { triggerImpact(); onSelect(dayNum); }}
+            style={{
+              flex: 1, alignItems: "center", justifyContent: "center", height: 40,
+              borderRadius: 12, backgroundColor: isActive ? VOLT : "transparent",
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 12, fontWeight: isActive ? "900" : "600",
+                color: isActive ? "#000" : "#8e8e93",
+              }}
+            >
+              {label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
 // ── Main workout tab — the "lobby" view. The set-execution "focus" view lives
 // at app/(portal)/exercise/[id].tsx; all shared session state (lifecycle,
 // sets, biometrics, timers) comes from useWorkout(). ─────────────────────────
@@ -88,13 +134,26 @@ export default function WorkoutTab() {
     lifecycle, setLifecycle, watchStatus, doneSets, doneEx, biometrics,
     setActiveExIdx, handleFinalizar, resetSession, syncCompletedSession,
     durationStr, allDone, sortedIndices, lifecycleLabel,
+    activeDay, setActiveDay,
   } = useWorkout();
   const { currentRank, progressPct, nextThresholdXP, addXP, rankUpFlash, clearRankUpFlash } = useGamification();
   const { celebrate } = useMotivation();
   const { student } = usePortal();
-  const { applyRoutineTemplate } = useSelfCoach();
+  const { applyRoutineTemplate, applyBaseRoutine, applyBaseDiet, localRoutine, localDiet } = useSelfCoach();
   const selfCoached = isSelfCoached(student);
+  const hasCoach = Boolean(student?.coachId && student.coachId !== null);
   const [showRoutinePicker, setShowRoutinePicker] = useState(false);
+  const [showCoachCode, setShowCoachCode] = useState(false);
+
+  // Módulo 1: Generación Automática del Plan Base
+  useEffect(() => {
+    if (selfCoached && !isLoading && student) {
+      if (!localRoutine && !localDiet) {
+        applyBaseRoutine(generateBaseRoutinePlan(4));
+        applyBaseDiet(generateBaseNutritionPlan(25, student.currentWeight || 75, 175, "M", "Hipertrofia"));
+      }
+    }
+  }, [selfCoached, isLoading, student, localRoutine, localDiet, applyBaseRoutine, applyBaseDiet]);
 
   // Auto-dismiss the rank-up toast a couple seconds after it fires.
   useEffect(() => {
@@ -173,10 +232,11 @@ export default function WorkoutTab() {
   }, [lifecycle, setActiveExIdx]);
 
   const setPhase = useCallback((l: "ACTIVE_TRACKING" | "PAUSED") => {
-    if (!hasAssignment) return;   // nothing assigned today — the pill is hidden, but guard the callback too
+    // Si no hay assignment y es selfCoached, permitimos Entreno Libre, de lo contrario bloqueamos.
+    if (!hasAssignment && !selfCoached) return;
     triggerImpact();
     setLifecycle(l);
-  }, [setLifecycle, hasAssignment]);
+  }, [setLifecycle, hasAssignment, selfCoached]);
 
   // ── Portal hydration gate — avoids flashing the "sin programación" empty
   // state during the brief window before the coach's assignment arrives. ────
@@ -241,11 +301,30 @@ export default function WorkoutTab() {
       >
         {/* User Profile Header */}
         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: GUTTER, marginTop: 12 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-            <UserAvatar image={user?.image} name={user?.name} size={36} />
+          <TouchableOpacity onPress={() => router.push("/perfil")} activeOpacity={0.7} style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <UserAvatar image={user?.image || student?.avatarUrl} name={user?.name || student?.name} size={36} />
             <Text style={{ fontSize: 13, fontWeight: "800", color: "#fff" }}>HOLA, {user?.name?.split(" ")[0] || "ATLETA"}</Text>
-          </View>
+          </TouchableOpacity>
         </View>
+
+        <WeekdayStrip activeDay={activeDay} onSelect={setActiveDay} />
+
+        {/* Módulo 4: Banner de Conversión */}
+        {!(hasCoach || hasAnyRoutine || inSession) && (
+          <View style={{ marginHorizontal: GUTTER, marginTop: 16, borderRadius: 16, overflow: "hidden", ...GLASS, padding: 20 }}>
+            <Text style={{ ...athletic, fontSize: 18, color: VOLT, marginBottom: 4 }}>¿QUIERES RESULTADOS 2X MÁS RÁPIDOS?</Text>
+            <Text style={{ fontSize: 12, color: SILVER, marginBottom: 16, lineHeight: 18 }}>Sincroniza con tu coach para desbloquear métricas avanzadas y un plan 100% personalizado a tus objetivos.</Text>
+            <View style={{ flexDirection: "row", gap: 10 }}>
+              <TouchableOpacity onPress={() => router.push("/coaches" as any)} style={{ flex: 1, backgroundColor: VOLT, borderRadius: 12, paddingVertical: 12, alignItems: "center" }}>
+                <Text style={{ ...athletic, fontSize: 12, color: "#000" }}>BUSCAR UN COACH</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setShowCoachCode(true)} style={{ flex: 1, backgroundColor: "rgba(255,255,255,0.1)", borderRadius: 12, paddingVertical: 12, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 }}>
+                <Search size={14} color="#fff" />
+                <Text style={{ ...athletic, fontSize: 12, color: "#fff" }}>TENGO UN CÓDIGO</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         {/* ── 1 · Informational header & live pause status stack ── */}
         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: GUTTER, marginTop: 12 }}>
@@ -428,17 +507,12 @@ export default function WorkoutTab() {
           RUTINA DEL DÍA
         </Text>
 
-        {/* Módulo 3/2 — !hasAssignment se ramifica en tres estados reales,
-            distinguidos por hasAnyRoutine (lib/workout.tsx: ¿existe alguna
-            rutina, real o auto-elegida?) y selfCoached (lib/portal.tsx:
-            ¿el alumno tiene coach vinculado?): */}
-        {!hasAssignment && hasAnyRoutine && (
-          // 1 · Hay rutina (real o self-plan) pero hoy resolvió sin
-          //     ejercicios — descanso legítimo dentro del plan.
+        {/* Módulo 3/2 — !hasAssignment se ramifica en tres estados reales */}
+        {!hasAssignment && hasCoach && (
           <View style={{ ...GLASS, borderRadius: 24, marginHorizontal: GUTTER, padding: 28, alignItems: "center", gap: 12 }}>
             <Moon size={26} color={CYAN} strokeWidth={1.5} />
             <Text style={{ ...athletic, fontSize: 20, color: "#fff", textAlign: "center" }}>
-              Día de descanso
+              Día de descanso programado por tu Coach 🌙
             </Text>
             <Text className="text-center" style={{ fontSize: 12, fontWeight: "700", color: SILVER, lineHeight: 18 }}>
               Tu coach no programó entrenamiento para hoy. Aprovecha para recuperar — el músculo crece en el descanso, no solo en el gimnasio.
@@ -446,41 +520,45 @@ export default function WorkoutTab() {
           </View>
         )}
 
-        {!hasAssignment && !hasAnyRoutine && !selfCoached && (
-          // 2 · Nunca hubo rutina, Y el alumno sí tiene coach — el coach
-          //     enfocó la asignación exclusivamente en nutrición/descanso.
-          <View style={{ ...GLASS, borderRadius: 24, marginHorizontal: GUTTER, padding: 28, alignItems: "center", gap: 12 }}>
-            <Salad size={26} color={VOLT} strokeWidth={1.5} />
-            <Text style={{ ...athletic, fontSize: 17, color: "#fff", textAlign: "center", letterSpacing: -0.3 }}>
-              {"DÍA DE RECUPERACIÓN\n// SIN PROGRAMACIÓN DE ENTRENO HOY"}
+        {/* Dashboard Solo: Acciones rápidas siempre disponibles si no tiene Coach */}
+        {!hasCoach && (
+          <View style={{ ...GLASS, borderRadius: 24, marginHorizontal: GUTTER, padding: 20, gap: 12 }}>
+            <Text style={{ fontSize: 11, fontWeight: "800", color: SILVER, textTransform: "uppercase", letterSpacing: 0.5 }}>
+              MI PLAN ACTIVO: {localRoutine?.nombre || "PLAN BASE"}
             </Text>
-            <Text className="text-center" style={{ fontSize: 12, fontWeight: "700", color: SILVER, lineHeight: 18 }}>
-              Tu coach enfocó tu plan de hoy exclusivamente en la nutrición y descanso muscular.
-            </Text>
-          </View>
-        )}
-
-        {!hasAssignment && !hasAnyRoutine && selfCoached && (
-          // 3 · Modo auto-entrenador sin plan elegido todavía — desbloquea
-          //     el selector de plantillas reales del catálogo (Módulo 2).
-          <View style={{ ...GLASS, borderRadius: 24, marginHorizontal: GUTTER, padding: 28, alignItems: "center", gap: 14 }}>
-            <Text style={{ ...athletic, fontSize: 18, color: "#fff", textAlign: "center" }}>
-              Modo auto-entrenador
-            </Text>
-            <Text className="text-center" style={{ fontSize: 12, fontWeight: "700", color: SILVER, lineHeight: 18 }}>
-              No tienes coach vinculado — elige una rutina del catálogo para empezar a entrenar hoy mismo.
-            </Text>
-            <TouchableOpacity
-              activeOpacity={0.85}
-              onPress={() => { triggerImpact(); setShowRoutinePicker(true); }}
-              style={{
-                width: "100%", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-                backgroundColor: VOLT, borderRadius: 999, paddingVertical: 14,
-              }}
-            >
-              <Plus size={16} color="#000" />
-              <Text style={{ ...athletic, fontSize: 13, color: "#000" }}>CREAR MI RUTINA</Text>
-            </TouchableOpacity>
+            {!hasAssignment && (
+              <View style={{ alignItems: "center", paddingVertical: 12 }}>
+                <Moon size={26} color={CYAN} strokeWidth={1.5} style={{ marginBottom: 8 }} />
+                <Text style={{ ...athletic, fontSize: 16, color: "#fff", textAlign: "center" }}>
+                  DÍA DE DESCANSO
+                </Text>
+              </View>
+            )}
+            <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => router.push("/quick-workout" as any)}
+                style={{ flexBasis: "48%", backgroundColor: VOLT, borderRadius: 12, paddingVertical: 12, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 }}
+              >
+                <Play size={14} color="#000" fill="#000" />
+                <Text style={{ ...athletic, fontSize: 11, color: "#000" }}>ENTRENO LIBRE</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => setShowRoutinePicker(true)}
+                style={{ flexBasis: "48%", backgroundColor: "rgba(255,255,255,0.1)", borderRadius: 12, paddingVertical: 12, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 }}
+              >
+                <Search size={14} color="#fff" />
+                <Text style={{ ...athletic, fontSize: 11, color: "#fff" }}>PLANTILLAS</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                style={{ flexBasis: "100%", backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.1)", borderRadius: 12, paddingVertical: 12, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 }}
+              >
+                <Edit2 size={14} color={SILVER} />
+                <Text style={{ ...athletic, fontSize: 11, color: SILVER }}>PERSONALIZAR DÍAS</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
@@ -591,6 +669,14 @@ export default function WorkoutTab() {
           if (tpl.type !== "routine") return;
           await applyRoutineTemplate(tpl);
           triggerSuccess();
+        }}
+      />
+      <EnterCoachCodeModal
+        visible={showCoachCode}
+        onClose={() => setShowCoachCode(false)}
+        onSuccess={(name) => {
+          setShowCoachCode(false);
+          // Opcional: trigger un refetch del roster/estado del usuario aquí.
         }}
       />
     </SafeAreaView>

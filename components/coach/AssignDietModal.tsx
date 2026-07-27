@@ -2,7 +2,7 @@ import {
   View, Text, TextInput, TouchableOpacity, Pressable, ScrollView, Modal, ActivityIndicator,
   KeyboardAvoidingView, Platform,
 } from "react-native";
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import * as Haptics from "expo-haptics";
 import { Plus, X, Trash2 } from "lucide-react-native";
 import { useAuth } from "@/lib/session";
@@ -79,6 +79,17 @@ export default function AssignDietModal({ visible, studentId, initialDieta, onCl
   const [selectedDia, setSelectedDia] = useState<DiaSemana>(diaSemanaDeHoy());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (visible) {
+      const hasInit = !dietaEstaVacia(initialDieta);
+      setNombre(hasInit ? initialDieta.nombre : "");
+      setDias({ ...initialDieta.configuracionPorDia });
+      setSelectedDia(diaSemanaDeHoy());
+      setSaving(false);
+      setError(null);
+    }
+  }, [visible, initialDieta]);
 
   const dia = dias[selectedDia];
   const canSave = nombre.trim().length > 0;

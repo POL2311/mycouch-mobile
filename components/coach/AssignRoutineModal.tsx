@@ -2,7 +2,7 @@ import {
   View, Text, TextInput, TouchableOpacity, Pressable, ScrollView, Modal, ActivityIndicator,
   KeyboardAvoidingView, Platform,
 } from "react-native";
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { Plus, X, Trash2 } from "lucide-react-native";
 import { useAuth } from "@/lib/session";
 import { triggerImpact } from "@/lib/haptics";
@@ -110,6 +110,23 @@ export default function AssignRoutineModal({ visible, studentId, initialRoutine,
   const [pickerOpen, setPickerOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (visible) {
+      const hasInit = !rutinaEstaVacia(initialRoutine);
+      setNombre(hasInit ? initialRoutine.nombre : "");
+      const seed = emptyDiasPorSemana();
+      for (const n of NUMEROS_SEMANA) {
+        const cfg = initialRoutine.semanas[n]?.configuracionPorDia;
+        if (cfg) seed[n] = { ...cfg };
+      }
+      setSemanas(seed);
+      setSelectedSemana(semanaActualPorFecha(initialRoutine.fechaInicio));
+      setSelectedDia(diaSemanaDeHoy());
+      setSaving(false);
+      setError(null);
+    }
+  }, [visible, initialRoutine]);
 
   const dia = semanas[selectedSemana]?.[selectedDia];
   const canSave = nombre.trim().length > 0;
