@@ -16,9 +16,17 @@
     },
     "ios": {
       "supportsTablet": false,
-      "buildNumber": "13",
+      "buildNumber": "14",
       "bundleIdentifier": "com.fellsteam.mycoach",
+      "entitlements": {
+        "com.apple.developer.healthkit": true
+      },
       "infoPlist": {
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLSchemes": ["mycoach"]
+          }
+        ],
         "UIViewControllerBasedStatusBarAppearance": true,
         "UIBackgroundModes": [
           "audio",

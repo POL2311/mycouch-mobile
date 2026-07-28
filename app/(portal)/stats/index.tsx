@@ -28,6 +28,8 @@ import { triggerImpact, triggerSuccess, triggerWarning } from "@/lib/haptics";
 import { ShimmerScreen } from "@/components/ShimmerLoader";
 import { tacticalSubHeader } from "@/lib/typography";
 import { BiometricsCard } from "@/components/BiometricsCard";
+import { useGamification } from "@/lib/gamification";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 // ── Stats engine tokens ──────────────────────────────────────────────────────
 const VOLT   = "#CCFF00";
@@ -195,11 +197,12 @@ function GridMatrix() {
 //  (detail.photos, subidas vía POST /api/me/photos — mismo endpoint real que
 //  ya usa el web, ahora también cableado en mobile a través de lib/portal.tsx).
 // ══════════════════════════════════════════════════════════════════════════════
-function EvolutionModal({ visible, onClose, photos, token, onUploaded }: {
+function EvolutionModal({ visible, onClose, photos, token, onUploaded, studentId }: {
   visible: boolean; onClose: () => void;
   photos: PortalDetail["photos"];
   token: string | null;
   onUploaded: () => void;
+  studentId: string;
 }) {
   const insets = useSafeAreaInsets();
   const [isLoading, setIsLoading] = useState(false);
@@ -217,7 +220,16 @@ function EvolutionModal({ visible, onClose, photos, token, onUploaded }: {
     setIsLoading(true);
     const deleted = await deleteProgressPhoto(id, token);
     setIsLoading(false);
-    if (deleted) { triggerSuccess(); onUploaded(); } else { triggerWarning(); }
+    if (deleted) { 
+      if (photos) {
+        const newPhotos = photos.filter(p => p.id !== id);
+        AsyncStorage.setItem(`@progress_photos_${studentId}`, JSON.stringify(newPhotos)).catch(() => {});
+      }
+      triggerSuccess(); 
+      onUploaded(); 
+    } else { 
+      triggerWarning(); 
+    }
   };
 
   const handleEditPhoto = async (id: string, updates: { label?: string; weight?: number; createdAt?: string }) => {
@@ -982,6 +994,7 @@ export default function StatsScreen() {
         photos={detail?.photos}
         token={token}
         onUploaded={refresh}
+        studentId={student?.id ?? ""}
       />
     </SafeAreaView>
   );

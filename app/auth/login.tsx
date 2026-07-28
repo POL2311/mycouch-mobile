@@ -1,13 +1,16 @@
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator,
-  KeyboardAvoidingView, Platform,
+  KeyboardAvoidingView, Platform, Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { ChevronLeft } from "lucide-react-native";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useAuth } from "@/lib/session";
 import Svg, { Path } from "react-native-svg";
+import * as Google from "expo-auth-session/providers/google";
+import * as WebBrowser from "expo-web-browser";
+import { makeRedirectUri } from "expo-auth-session";
 
 const VOLT   = "#CCFF00";
 const SILVER = "#8e8e93";
@@ -36,6 +39,30 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
   const [error,    setError]    = useState<string | null>(null);
   const [loading,  setLoading]  = useState(false);
+
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
+    redirectUri: makeRedirectUri({ scheme: "mycoach" }),
+  });
+
+  useEffect(() => {
+    if (response?.type === "success") {
+      const { authentication } = response;
+      const token = authentication?.idToken || authentication?.accessToken;
+      if (token) {
+        setLoading(true);
+        loginWithGoogle(token).catch(e => {
+          Alert.alert("Error de Autenticación", "No se pudo iniciar sesión con Google. Revisa las credenciales.");
+          setLoading(false);
+        });
+      } else {
+        Alert.alert("Error de Autenticación", "No se pudo iniciar sesión con Google. Revisa las credenciales.");
+      }
+    } else if (response && response.type !== "cancel" && response.type !== "dismiss") {
+      Alert.alert("Error de Autenticación", "No se pudo iniciar sesión con Google. Revisa las credenciales.");
+    }
+  }, [response, loginWithGoogle]);
 
   const handleLogin = useCallback(async () => {
     if (!email || !password) { setError("Completa correo y contraseña."); return; }
@@ -119,12 +146,13 @@ export default function LoginScreen() {
 
           <TouchableOpacity
             activeOpacity={0.85}
-            disabled={loading}
-            onPress={loginWithGoogle}
+            disabled={!request || loading}
+            onPress={() => promptAsync()}
             style={{
               height: 54, borderRadius: 27, backgroundColor: "rgba(255,255,255,0.05)",
               borderWidth: 1, borderColor: "rgba(255,255,255,0.15)",
               alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 12,
+              opacity: !request || loading ? 0.6 : 1,
             }}
           >
             <Text style={{ fontSize: 16 }}>🌐</Text>

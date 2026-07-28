@@ -88,18 +88,34 @@ export async function fetchDailyBiometrics(): Promise<DailyBiometrics> {
 export function useHealthData() {
   const [data, setData] = useState<DailyBiometrics>({ steps: 0, activeCalories: 0, avgHeartRate: 0 });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const sync = async () => {
     setLoading(true);
-    const initialized = await initHealthKit();
-    const result = await fetchDailyBiometrics();
-    setData(result);
-    setLoading(false);
+    setError(null);
+    try {
+      const initPromise = initHealthKit();
+      const timeoutPromise = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3000));
+      const initialized = await Promise.race([initPromise, timeoutPromise]);
+      
+      if (!initialized) {
+        setError("Sincronización con Apple Health no disponible / Desactivada");
+        setLoading(false);
+        return;
+      }
+      
+      const result = await fetchDailyBiometrics();
+      setData(result);
+    } catch (e) {
+      setError("Sincronización con Apple Health no disponible / Desactivada");
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
     sync();
   }, []);
 
-  return { data, loading, sync };
+  return { data, loading, error, sync };
 }

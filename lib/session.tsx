@@ -20,7 +20,7 @@ interface AuthState {
   role:      AuthUser["role"] | null;
   isLoading: boolean;
   login:     (email: string, password: string) => Promise<void>;
-  loginWithGoogle: () => Promise<void>;
+  loginWithGoogle: (googleToken: string) => Promise<void>;
   logout:    () => Promise<void>;
   // Both PATCH /api/mobile/me and POST /api/mobile/me/password are inferred
   // paths, not verified contracts — GET /api/mobile/me is the one confirmed
@@ -107,26 +107,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(res.user);
   }
 
-  async function loginWithGoogle() {
-    // Implementación simulada de Google Sign-In ya que el backend es custom y no tenemos 
-    // supabase o firebase configurado actualmente.
-    // En producción esto invocaría expo-auth-session o un SDK de Google Sign In,
-    // y enviaría el token de Google al backend para validar e inicializar status="ACTIVO".
-    
-    // Mock successful auth from google
-    const mockUser: AuthUser = {
-      id: "google-123",
-      name: "Atleta Google",
-      email: "atleta@google.com",
-      image: "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=200&q=60",
-      role: "CLIENT",
-      status: "ACTIVO",
-    };
-    
-    const mockToken = "mock_google_jwt_" + Date.now();
-    await SecureStore.setItemAsync(TOKEN_KEY, mockToken);
-    setToken(mockToken);
-    setUser(mockUser);
+  async function loginWithGoogle(googleToken: string) {
+    // Aquí contactamos al backend para que verifique el token de Google y devuelva nuestra sesión
+    const res = await api<{ token: string; user: AuthUser }>("/api/auth/google", { 
+      method: "POST", 
+      body: { token: googleToken } 
+    });
+
+    if (res.user.status === "SUSPENDIDO" || res.user.status === "INACTIVO") {
+      throw new Error("Cuenta suspendida");
+    }
+
+    await SecureStore.setItemAsync(TOKEN_KEY, res.token);
+    setToken(res.token);
+    setUser(res.user);
   }
 
   async function logout() {

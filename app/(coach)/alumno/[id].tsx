@@ -383,7 +383,19 @@ export default function AlumnoDetailScreen() {
     const seq = ++requestSeq.current;
     setDetailLoading(true);
     fetchStudentDetail(id, token)
-      .then(d => { if (requestSeq.current === seq) setDetail(d); })
+      .then(async d => { 
+        if (requestSeq.current === seq) {
+          // Override con fotos guardadas localmente (Módulo 1)
+          try {
+            const localPhotosStr = await AsyncStorage.getItem(`@progress_photos_${id}`);
+            if (localPhotosStr) {
+              const localPhotos = JSON.parse(localPhotosStr);
+              if (Array.isArray(localPhotos)) d.photos = localPhotos;
+            }
+          } catch {}
+          setDetail(d);
+        }
+      })
       .catch(() => { if (requestSeq.current === seq) setDetail(null); })
       .finally(() => { if (requestSeq.current === seq) setDetailLoading(false); });
   }, [id, token]);
@@ -402,7 +414,9 @@ export default function AlumnoDetailScreen() {
         weight: weight,
         createdAt: new Date().toISOString()
       };
-      return { ...prev, photos: [...(prev.photos || []), newPhoto] };
+      const newPhotos = [...(prev.photos || []), newPhoto];
+      AsyncStorage.setItem(`@progress_photos_${id}`, JSON.stringify(newPhotos)).catch(() => {});
+      return { ...prev, photos: newPhotos };
     });
   };
 
@@ -413,6 +427,7 @@ export default function AlumnoDetailScreen() {
       const newPhotos = (prev.photos || []).map(p => 
         p.id === photoId ? { ...p, ...updates, weight: updates.weight ?? p.weight } : p
       );
+      AsyncStorage.setItem(`@progress_photos_${id}`, JSON.stringify(newPhotos)).catch(() => {});
       return { ...prev, photos: newPhotos };
     });
   };
@@ -422,6 +437,7 @@ export default function AlumnoDetailScreen() {
     setDetail(prev => {
       if (!prev) return prev;
       const newPhotos = (prev.photos || []).filter(p => p.id !== photoId);
+      AsyncStorage.setItem(`@progress_photos_${id}`, JSON.stringify(newPhotos)).catch(() => {});
       return { ...prev, photos: newPhotos };
     });
   };

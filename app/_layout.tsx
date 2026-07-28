@@ -3,8 +3,14 @@ import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
 import * as SplashScreen from "expo-splash-screen";
+import * as WebBrowser from "expo-web-browser";
 import { AuthProvider, useAuth } from "@/lib/session";
 import "@/global.css";
+
+// ── Google OAuth Initialization ─────────────────────────────────────────────
+// This ensures that when the user authenticates in Chrome/Safari, the browser
+// tab is closed automatically and redirects back to the app with the token.
+WebBrowser.maybeCompleteAuthSession();
 
 // Keep splash visible while fonts/session load
 SplashScreen.preventAutoHideAsync();

@@ -33,9 +33,8 @@ export function ScientificSourcesModal() {
           borderColor: "rgba(255,255,255,0.1)",
         }}
       >
-        <Book size={16} color={SILVER} />
         <Text style={{ fontSize: 13, fontWeight: "800", color: SILVER }}>
-          Aviso Médico y Fuentes Científicas
+          📖 Fuentes y Referencias Científicas (ISSN / PubMed)
         </Text>
       </TouchableOpacity>
 
@@ -63,7 +62,7 @@ export function ScientificSourcesModal() {
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
                 <View style={{ backgroundColor: "rgba(255,255,255,0.05)", borderRadius: 16, padding: 16, marginBottom: 24 }}>
                   <Text style={{ fontSize: 14, color: "#fff", lineHeight: 22 }}>
-                    Los cálculos de calorías y macronutrientes generados por esta app son estimaciones de carácter informativo y educativo. Esta aplicación no proporciona diagnóstico ni tratamiento médico. Consulta a un profesional de la salud antes de iniciar cualquier plan nutricional.
+                    MyCouch proporciona recomendaciones nutricionales basadas en literatura científica internacional. Las pautas son informativas y no sustituyen la consulta médica o nutricional personalizada.
                   </Text>
                 </View>
 
@@ -72,24 +71,27 @@ export function ScientificSourcesModal() {
                 <View style={{ gap: 12 }}>
                   <TouchableOpacity onPress={() => openLink("https://pubmed.ncbi.nlm.nih.gov/2305711/")} style={{ backgroundColor: "rgba(18,18,20,0.65)", borderWidth: 1, borderColor: "rgba(255,255,255,0.05)", borderRadius: 16, padding: 16, flexDirection: "row", alignItems: "center", gap: 12 }}>
                     <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 14, fontWeight: "600", color: "#fff" }}>Ecuación Mifflin-St Jeor (1990)</Text>
-                      <Text style={{ fontSize: 12, color: SILVER, marginTop: 4 }}>Tasa Metabólica Basal</Text>
+                      <Text style={{ fontSize: 14, fontWeight: "600", color: "#fff" }}>Ecuación TDEE / Requerimiento Calórico (Mifflin-St Jeor)</Text>
+                      <Text style={{ fontSize: 12, color: SILVER, marginTop: 4 }}>Cálculo de Tasa Metabólica Basal basado en la fórmula Mifflin-St Jeor.</Text>
+                      <Text style={{ fontSize: 11, color: VOLT, marginTop: 4 }}>American Journal of Clinical Nutrition (AJCN)</Text>
+                    </View>
+                    <ExternalLink size={16} color={SILVER} />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity onPress={() => openLink("https://jissn.biomedcentral.com/articles/10.1186/s12970-017-0174-y")} style={{ backgroundColor: "rgba(18,18,20,0.65)", borderWidth: 1, borderColor: "rgba(255,255,255,0.05)", borderRadius: 16, padding: 16, flexDirection: "row", alignItems: "center", gap: 12 }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 14, fontWeight: "600", color: "#fff" }}>Distribución de Macronutrientes para Deportistas</Text>
+                      <Text style={{ fontSize: 12, color: SILVER, marginTop: 4 }}>Postura oficial sobre dietas, composición corporal y rendimiento deportivo.</Text>
+                      <Text style={{ fontSize: 11, color: VOLT, marginTop: 4 }}>International Society of Sports Nutrition (ISSN)</Text>
                     </View>
                     <ExternalLink size={16} color={SILVER} />
                   </TouchableOpacity>
 
                   <TouchableOpacity onPress={() => openLink("https://jissn.biomedcentral.com/articles/10.1186/s12970-017-0177-8")} style={{ backgroundColor: "rgba(18,18,20,0.65)", borderWidth: 1, borderColor: "rgba(255,255,255,0.05)", borderRadius: 16, padding: 16, flexDirection: "row", alignItems: "center", gap: 12 }}>
                     <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 14, fontWeight: "600", color: "#fff" }}>Postura Oficial ISSN (2017)</Text>
-                      <Text style={{ fontSize: 12, color: SILVER, marginTop: 4 }}>Proteína y Ejercicio</Text>
-                    </View>
-                    <ExternalLink size={16} color={SILVER} />
-                  </TouchableOpacity>
-
-                  <TouchableOpacity onPress={() => openLink("https://www.fao.org/3/y5686e/y5686e00.htm")} style={{ backgroundColor: "rgba(18,18,20,0.65)", borderWidth: 1, borderColor: "rgba(255,255,255,0.05)", borderRadius: 16, padding: 16, flexDirection: "row", alignItems: "center", gap: 12 }}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ fontSize: 14, fontWeight: "600", color: "#fff" }}>FAO/WHO/UNU (2001)</Text>
-                      <Text style={{ fontSize: 12, color: SILVER, marginTop: 4 }}>Requerimientos Energéticos</Text>
+                      <Text style={{ fontSize: 14, fontWeight: "600", color: "#fff" }}>Requerimientos Proteicos Diarios</Text>
+                      <Text style={{ fontSize: 12, color: SILVER, marginTop: 4 }}>Postura del ISSN sobre ingesta de proteínas y ejercicio.</Text>
+                      <Text style={{ fontSize: 11, color: VOLT, marginTop: 4 }}>Journal of the International Society of Sports Nutrition</Text>
                     </View>
                     <ExternalLink size={16} color={SILVER} />
                   </TouchableOpacity>

@@ -18,7 +18,7 @@ const BENTO = {
 } as const;
 
 export function BiometricsCard() {
-  const { data, loading, sync } = useHealthData();
+  const { data, loading, error, sync } = useHealthData();
   const [showPreModal, setShowPreModal] = useState(false);
 
   const handleSyncPress = () => {
@@ -46,6 +46,12 @@ export function BiometricsCard() {
       {loading ? (
         <View style={{ height: 60, alignItems: "center", justifyContent: "center" }}>
           <ActivityIndicator size="small" color={VOLT} />
+        </View>
+      ) : error ? (
+        <View style={{ height: 60, alignItems: "center", justifyContent: "center" }}>
+          <Text style={{ fontSize: 11, color: SILVER, textAlign: "center", fontStyle: "italic" }}>
+            {error}
+          </Text>
         </View>
       ) : (
         <View style={{ flexDirection: "row", gap: 8 }}>
