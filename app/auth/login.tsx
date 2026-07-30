@@ -40,27 +40,38 @@ export default function LoginScreen() {
   const [error,    setError]    = useState<string | null>(null);
   const [loading,  setLoading]  = useState(false);
 
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
-    iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
-    redirectUri: makeRedirectUri({ scheme: "mycoach" }),
-  });
+  let googleConfig = { webClientId: "", iosClientId: "", redirectUri: "" };
+  try {
+    googleConfig = {
+      webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '',
+      iosClientId: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '',
+      redirectUri: makeRedirectUri({ scheme: "mycoach" }),
+    };
+  } catch (e) {
+    console.warn("Error config google auth", e);
+  }
+
+  const [request, response, promptAsync] = Google.useAuthRequest(googleConfig);
 
   useEffect(() => {
-    if (response?.type === "success") {
-      const { authentication } = response;
-      const token = authentication?.idToken || authentication?.accessToken;
-      if (token) {
-        setLoading(true);
-        loginWithGoogle(token).catch(e => {
+    try {
+      if (response?.type === "success") {
+        const authentication = response?.authentication;
+        const token = authentication?.idToken || authentication?.accessToken;
+        if (token) {
+          setLoading(true);
+          loginWithGoogle(token).catch(e => {
+            Alert.alert("Error de Autenticación", e?.message || "No se pudo iniciar sesión con Google. Revisa las credenciales.");
+            setLoading(false);
+          });
+        } else {
           Alert.alert("Error de Autenticación", "No se pudo iniciar sesión con Google. Revisa las credenciales.");
-          setLoading(false);
-        });
-      } else {
+        }
+      } else if (response && response?.type !== "cancel" && response?.type !== "dismiss") {
         Alert.alert("Error de Autenticación", "No se pudo iniciar sesión con Google. Revisa las credenciales.");
       }
-    } else if (response && response.type !== "cancel" && response.type !== "dismiss") {
-      Alert.alert("Error de Autenticación", "No se pudo iniciar sesión con Google. Revisa las credenciales.");
+    } catch (err) {
+      console.warn("Google auth handling error:", err);
     }
   }, [response, loginWithGoogle]);
 
@@ -69,11 +80,11 @@ export default function LoginScreen() {
     setError(null);
     setLoading(true);
     try {
-      await login(email.trim().toLowerCase(), password);
+      await login(email?.trim()?.toLowerCase(), password);
       // No navigation call here — app/_layout.tsx's <Stack.Protected> guards
       // react to the token change and mount the correct protected tree.
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Error de autenticación.");
+    } catch (e: any) {
+      setError(e?.message || "Error de autenticación.");
     } finally {
       setLoading(false);
     }

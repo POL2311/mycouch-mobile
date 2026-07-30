@@ -160,10 +160,44 @@ export default function OnboardingWizard() {
   }, []);
 
   const advance = useCallback(async () => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    if (stepIdx < STEP_ORDER.length - 1) { setStep(STEP_ORDER[stepIdx + 1]!); return; }
-    router.push("/auth/login");
-  }, [stepIdx]);
+    try {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+      
+      // Guardado explícito y protegido de AsyncStorage antes de avanzar
+      const payload: OnboardingIntake = {
+        stage: stage || "Volumen",
+        frictions: Array.from(frictions || []),
+        operationalMode: operationalMode || "SOLO",
+        targetWeight: targetWeight || "",
+        height: height || "",
+      };
+      
+      try {
+        await AsyncStorage.setItem(INTAKE_CACHE_KEY, JSON.stringify(payload));
+      } catch (storageError) {
+        console.warn("AsyncStorage fallback applied:", storageError);
+      }
+
+      if (stepIdx < STEP_ORDER.length - 1) {
+        setStep(STEP_ORDER[stepIdx + 1]!);
+        return;
+      }
+      
+      setTimeout(() => {
+        router.push("/auth/login");
+      }, 50);
+    } catch (error) {
+      console.warn("Error en flujo de Onboarding:", error);
+      // Fallback en caso de error crítico
+      if (stepIdx >= STEP_ORDER.length - 1) {
+        setTimeout(() => {
+          router.push("/auth/login");
+        }, 50);
+      } else {
+        setStep(STEP_ORDER[stepIdx + 1]!);
+      }
+    }
+  }, [stepIdx, stage, frictions, operationalMode, targetWeight, height]);
 
   return (
     <SafeAreaView edges={["top", "bottom"]} style={{ flex: 1, backgroundColor: "#070708" }}>

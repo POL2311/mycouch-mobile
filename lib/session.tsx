@@ -87,40 +87,86 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // file used to carry — this provider's only job now is state.
 
   async function login(email: string, password: string) {
-    const res = await api<{ token: string; user: AuthUser }>("/api/mobile/login", {
-      method: "POST",
-      body:   { email, password },
-    });
-
-    if (res.user.status === "SUSPENDIDO" || res.user.status === "INACTIVO") {
-      import("react-native").then(({ Alert }) => {
-        Alert.alert(
-          "Acceso Denegado",
-          "Tu cuenta se encuentra suspendida. Ponte en contacto con tu Coach para reactivar tu acceso."
-        );
+    try {
+      const res = await api<{ token: string; user: AuthUser }>("/api/mobile/login", {
+        method: "POST",
+        body:   { email, password },
       });
-      return;
-    }
 
-    await SecureStore.setItemAsync(TOKEN_KEY, res.token);
-    setToken(res.token);
-    setUser(res.user);
+      if (!res || !res.token || !res.user) {
+        import("react-native").then(({ Alert }) => {
+          Alert.alert("Aviso", "No se pudo conectar al servidor. Intenta de nuevo.");
+        });
+        throw new Error("Respuesta inválida del servidor");
+      }
+
+      if (res.user.status === "SUSPENDIDO" || res.user.status === "INACTIVO") {
+        import("react-native").then(({ Alert }) => {
+          Alert.alert(
+            "Acceso Denegado",
+            "Tu cuenta se encuentra suspendida. Ponte en contacto con tu Coach para reactivar tu acceso."
+          );
+        });
+        throw new Error("Cuenta suspendida");
+      }
+
+      await SecureStore.setItemAsync(TOKEN_KEY, String(res.token ?? ""));
+      
+      // Delay de 50ms para permitir que el TurboModule de SecureStore termine en el hilo nativo antes de la transición de pantalla
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      setToken(res.token);
+      setUser(res.user);
+    } catch (error: any) {
+      if (error.message === "Network request failed" || error.status === 0 || error.message?.includes("fetch")) {
+        import("react-native").then(({ Alert }) => {
+          Alert.alert("Aviso", "No se pudo conectar al servidor. Intenta de nuevo.");
+        });
+      }
+      throw error;
+    }
   }
 
   async function loginWithGoogle(googleToken: string) {
-    // Aquí contactamos al backend para que verifique el token de Google y devuelva nuestra sesión
-    const res = await api<{ token: string; user: AuthUser }>("/api/auth/google", { 
-      method: "POST", 
-      body: { token: googleToken } 
-    });
-
-    if (res.user.status === "SUSPENDIDO" || res.user.status === "INACTIVO") {
-      throw new Error("Cuenta suspendida");
+    if (!googleToken) {
+      import("react-native").then(({ Alert }) => {
+        Alert.alert("Aviso", "No se pudo conectar al servidor. Intenta de nuevo.");
+      });
+      throw new Error("Token de Google indefinido");
     }
 
-    await SecureStore.setItemAsync(TOKEN_KEY, res.token);
-    setToken(res.token);
-    setUser(res.user);
+    try {
+      const res = await api<{ token: string; user: AuthUser }>("/api/auth/google", { 
+        method: "POST", 
+        body: { token: googleToken } 
+      });
+
+      if (!res || !res.token || !res.user) {
+        import("react-native").then(({ Alert }) => {
+          Alert.alert("Aviso", "No se pudo conectar al servidor. Intenta de nuevo.");
+        });
+        throw new Error("Respuesta inválida del servidor");
+      }
+
+      if (res.user.status === "SUSPENDIDO" || res.user.status === "INACTIVO") {
+        throw new Error("Cuenta suspendida");
+      }
+
+      await SecureStore.setItemAsync(TOKEN_KEY, String(res.token ?? ""));
+      
+      // Delay de 50ms para permitir que el TurboModule de SecureStore termine en el hilo nativo antes de la transición de pantalla
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      setToken(res.token);
+      setUser(res.user);
+    } catch (error: any) {
+      if (error.message === "Network request failed" || error.status === 0 || error.message?.includes("fetch")) {
+        import("react-native").then(({ Alert }) => {
+          Alert.alert("Aviso", "No se pudo conectar al servidor. Intenta de nuevo.");
+        });
+      }
+      throw error;
+    }
   }
 
   async function logout() {

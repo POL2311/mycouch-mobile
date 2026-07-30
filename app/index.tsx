@@ -9,6 +9,8 @@ const VOLT   = "#CCFF00";
 const SILVER = "#8e8e93";
 const athletic = { fontWeight: "900" as const, fontStyle: "italic" as const, textTransform: "uppercase" as const };
 
+import AsyncStorage from "@react-native-async-storage/async-storage";
+
 // Athletic-grit hero photography — same Unsplash convention used for the
 // Cinema Bento exercise cards elsewhere in this app.
 const HERO_IMG = "https://images.unsplash.com/photo-1534438327276-14e5300c3a48?w=1200&q=70";
@@ -35,6 +37,21 @@ function HeroScrim() {
 // and /auth/login — this screen only routes into them.
 export default function LandingScreen() {
   const { isLoading, token } = useAuth();
+
+  const handleAlreadyHaveAccount = async () => {
+    try {
+      // Limpia cualquier estado previo corrupto de manera segura
+      await AsyncStorage.getItem('@user_session').catch(() => null);
+      
+      // Delay de 50ms para permitir que el puente nativo (TurboModule) libere la memoria antes de cambiar la vista
+      setTimeout(() => {
+        router.push('/auth/login');
+      }, 50);
+    } catch (error) {
+      console.error('Navigation error:', error);
+      router.push('/auth/login');
+    }
+  };
 
   // AuthProvider's <Stack.Protected> guards own navigation on auth state
   // change; while a stored token is still being verified, render nothing so
@@ -83,7 +100,7 @@ export default function LandingScreen() {
 
           <TouchableOpacity
             activeOpacity={0.7}
-            onPress={() => router.push("/auth/login")}
+            onPress={handleAlreadyHaveAccount}
             style={{ alignItems: "center", marginTop: 18 }}
           >
             <Text style={{ fontSize: 13, color: "#d4d4d8" }}>

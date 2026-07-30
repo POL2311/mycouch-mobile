@@ -507,8 +507,8 @@ export default function WorkoutTab() {
           RUTINA DEL DÍA
         </Text>
 
-        {/* Módulo 3/2 — !hasAssignment se ramifica en tres estados reales */}
-        {!hasAssignment && hasCoach && (
+        {/* Módulo de Plan Activo / Descanso */}
+        {hasCoach && !hasAssignment ? (
           <View style={{ ...GLASS, borderRadius: 24, marginHorizontal: GUTTER, padding: 28, alignItems: "center", gap: 12 }}>
             <Moon size={26} color={CYAN} strokeWidth={1.5} />
             <Text style={{ ...athletic, fontSize: 20, color: "#fff", textAlign: "center" }}>
@@ -518,15 +518,13 @@ export default function WorkoutTab() {
               Tu coach no programó entrenamiento para hoy. Aprovecha para recuperar — el músculo crece en el descanso, no solo en el gimnasio.
             </Text>
           </View>
-        )}
-
-        {/* Dashboard Solo: Acciones rápidas siempre disponibles si no tiene Coach */}
-        {!hasCoach && (
+        ) : (
           <View style={{ ...GLASS, borderRadius: 24, marginHorizontal: GUTTER, padding: 20, gap: 12 }}>
             <Text style={{ fontSize: 11, fontWeight: "800", color: SILVER, textTransform: "uppercase", letterSpacing: 0.5 }}>
               MI PLAN ACTIVO: {localRoutine?.nombre || "PLAN BASE"}
             </Text>
-            {!hasAssignment && (
+            
+            {!hasAssignment && !hasCoach && (
               <View style={{ alignItems: "center", paddingVertical: 12 }}>
                 <Moon size={26} color={CYAN} strokeWidth={1.5} style={{ marginBottom: 8 }} />
                 <Text style={{ ...athletic, fontSize: 16, color: "#fff", textAlign: "center" }}>
@@ -534,38 +532,44 @@ export default function WorkoutTab() {
                 </Text>
               </View>
             )}
-            <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
-              <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => router.push("/quick-workout" as any)}
-                style={{ flexBasis: "48%", backgroundColor: VOLT, borderRadius: 12, paddingVertical: 12, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 }}
-              >
-                <Play size={14} color="#000" fill="#000" />
-                <Text style={{ ...athletic, fontSize: 11, color: "#000" }}>ENTRENO LIBRE</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => setShowRoutinePicker(true)}
-                style={{ flexBasis: "48%", backgroundColor: "rgba(255,255,255,0.1)", borderRadius: 12, paddingVertical: 12, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 }}
-              >
-                <Search size={14} color="#fff" />
-                <Text style={{ ...athletic, fontSize: 11, color: "#fff" }}>PLANTILLAS</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                activeOpacity={0.8}
-                style={{ flexBasis: "100%", backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.1)", borderRadius: 12, paddingVertical: 12, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 }}
-              >
-                <Edit2 size={14} color={SILVER} />
-                <Text style={{ ...athletic, fontSize: 11, color: SILVER }}>PERSONALIZAR DÍAS</Text>
-              </TouchableOpacity>
-            </View>
+
+            {!hasCoach && (
+              <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => router.push("/quick-workout" as any)}
+                  style={{ flexBasis: "48%", backgroundColor: VOLT, borderRadius: 12, paddingVertical: 12, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 }}
+                >
+                  <Play size={14} color="#000" fill="#000" />
+                  <Text style={{ ...athletic, fontSize: 11, color: "#000" }}>ENTRENO LIBRE</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  onPress={() => setShowRoutinePicker(true)}
+                  style={{ flexBasis: "48%", backgroundColor: "rgba(255,255,255,0.1)", borderRadius: 12, paddingVertical: 12, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 }}
+                >
+                  <Search size={14} color="#fff" />
+                  <Text style={{ ...athletic, fontSize: 11, color: "#fff" }}>PLANTILLAS</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.8}
+                  style={{ flexBasis: "100%", backgroundColor: "rgba(255,255,255,0.05)", borderWidth: 1, borderColor: "rgba(255,255,255,0.1)", borderRadius: 12, paddingVertical: 12, alignItems: "center", flexDirection: "row", justifyContent: "center", gap: 6 }}
+                >
+                  <Edit2 size={14} color={SILVER} />
+                  <Text style={{ ...athletic, fontSize: 11, color: SILVER }}>PERSONALIZAR DÍAS</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         )}
 
-        {sortedIndices.map((i, rank) => {
-          const ex            = exercises[i]!;
-          const doneSetsForEx = Math.min(doneSets[i] ?? 0, ex.sets);
-          const exDone        = doneEx.has(i) || doneSetsForEx >= ex.sets;
+        {sortedIndices?.map((i, rank) => {
+          const ex            = exercises?.[i];
+          if (!ex) return null;
+
+          const setsLimit     = ex?.sets ?? 0;
+          const doneSetsForEx = Math.min(doneSets?.[i] ?? 0, setsLimit);
+          const exDone        = doneEx?.has(i) || (setsLimit > 0 && doneSetsForEx >= setsLimit);
 
           return (
             <MotiView
@@ -584,14 +588,14 @@ export default function WorkoutTab() {
                 }}
               >
                 <ImageBackground
-                  source={{ uri: gymImageFor(ex.name, ex.muscleGroup) }}
+                  source={{ uri: gymImageFor(ex?.name ?? "Ejercicio", ex?.muscleGroup) }}
                   resizeMode="cover"
                   imageStyle={{ opacity: 0.7 }}
                   style={{ flex: 1, justifyContent: "flex-end" }}
                 >
                   <CardShade />
                   <View style={{ padding: 16, paddingRight: 76 }}>
-                    {ex.muscleGroup && (
+                    {ex?.muscleGroup && (
                       <Text
                         style={{ fontSize: 11, fontWeight: "800", letterSpacing: 0.5, color: CYAN, textTransform: "uppercase", marginBottom: 4 }}
                       >
@@ -602,10 +606,10 @@ export default function WorkoutTab() {
                       style={{ fontWeight: "900", fontSize: 19, lineHeight: 21, letterSpacing: -0.3, color: "#ffffff", textTransform: "uppercase" }}
                       numberOfLines={2}
                     >
-                      {ex.name}
+                      {ex?.name || "EJERCICIO"}
                     </Text>
                     <Text style={{ fontSize: 11, fontWeight: "700", color: ZINC, marginTop: 6 }}>
-                      {doneSetsForEx}/{ex.sets} SETS · {ex.reps} REPS
+                      {doneSetsForEx}/{setsLimit} SETS · {ex?.reps || 0} REPS
                     </Text>
                   </View>
                 </ImageBackground>
